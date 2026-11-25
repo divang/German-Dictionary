@@ -1,0 +1,144 @@
+{
+  "entities": {
+    "UserProgress": {
+      "title": "UserProgress",
+      "description": "Private per-user German A1 Certificate progress and synced dictionary bookmarks (PII-free).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the learner who owns this progress record.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "completedLessonIds": {
+          "type": "array",
+          "description": "Completed A1 curriculum module IDs (max 50)."
+        },
+        "masteredVocabIds": {
+          "type": "array",
+          "description": "Mastered A1 core vocabulary item IDs (max 200)."
+        },
+        "savedWordIds": {
+          "type": "array",
+          "description": "Saved LautBhasha dictionary entry IDs (max 100)."
+        },
+        "lastActiveModuleId": {
+          "type": "string",
+          "description": "Most recently studied A1 module ID for seamless cross-device resume.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "lastActiveTab": {
+          "type": "string",
+          "description": "Most recently used A1 workspace tab.",
+          "enum": ["modules", "hoeren", "lesen", "schreiben", "sprechen", "mock-exam"],
+          "maxLength": 32
+        },
+        "bestMockScore": {
+          "type": "number",
+          "description": "Highest percentage score (0-100) achieved across A1 mock exams."
+        },
+        "totalMockAttempts": {
+          "type": "number",
+          "description": "Total number of completed A1 mock exams (0-1000)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when user progress was first created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest sync update."
+        }
+      },
+      "required": [
+        "ownerId",
+        "completedLessonIds",
+        "masteredVocabIds",
+        "savedWordIds",
+        "lastActiveModuleId",
+        "lastActiveTab",
+        "bestMockScore",
+        "totalMockAttempts",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ExamAttempt": {
+      "title": "ExamAttempt",
+      "description": "Immutable completed German A1 mock exam or skill-section attempt record.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the learner who completed the attempt.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "examType": {
+          "type": "string",
+          "description": "A1 assessment category.",
+          "enum": ["mock-full", "hoeren", "lesen", "schreiben", "sprechen"],
+          "maxLength": 32
+        },
+        "status": {
+          "type": "string",
+          "description": "Terminal status; completed exam attempts cannot be mutated.",
+          "enum": ["completed"],
+          "maxLength": 16
+        },
+        "score": {
+          "type": "number",
+          "description": "Points earned (0-100)."
+        },
+        "maxScore": {
+          "type": "number",
+          "description": "Maximum possible points (1-100)."
+        },
+        "passed": {
+          "type": "boolean",
+          "description": "True when score meets or exceeds the official Goethe A1 60% passing threshold."
+        },
+        "sectionScores": {
+          "type": "object",
+          "description": "Per-skill breakdown map with hoeren, lesen, schreiben, sprechen integer scores (0-25)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the attempt was submitted."
+        }
+      },
+      "required": [
+        "ownerId",
+        "examType",
+        "status",
+        "score",
+        "maxScore",
+        "passed",
+        "sectionScores",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProgress"
+      },
+      "description": "Private per-learner A1 Certificate progress and synced dictionary bookmarks."
+    },
+    "/users/{userId}/examAttempts/{attemptId}": {
+      "schema": {
+        "$ref": "#/entities/ExamAttempt"
+      },
+      "description": "Immutable completed A1 mock exam and practice attempts belonging to the parent user."
+    }
+  }
+}

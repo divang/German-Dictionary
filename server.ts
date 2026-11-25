@@ -1,0 +1,592 @@
+import 'dotenv/config';
+import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { germanLexicon } from './server/lexiconIndex';
+import { buildGermanTtsAttempts } from './server/ttsHelper';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const PORT = Number(process.env.PORT) || 3000;
+const isProd = process.env.NODE_ENV === 'production';
+
+function createGeminiClient() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return null;
+  }
+  return new GoogleGenAI({
+    apiKey,
+    apiVersion: 'v1beta',
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
+
+const PRONOUNCE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    word: { type: Type.STRING, description: 'Canonical German word or short phrase with correct capitalization and umlauts.' },
+    article: { type: Type.STRING, description: 'German noun gender article: der, die, das, or empty string if not a noun.' },
+    partOfSpeech: { type: Type.STRING, description: 'e.g. Masculine noun, Verb, Adjective, Expression' },
+    cefr: { type: Type.STRING, description: 'CEFR level: A1, A2, B1, B2, or C1' },
+    englishMeaning: { type: Type.STRING, description: 'Concise English translation(s).' },
+    hindiMeaning: { type: Type.STRING, description: 'Natural Hindi meaning in Devanagari script.' },
+    devanagariFull: { type: Type.STRING, description: 'Full approximate German pronunciation written in Devanagari with hyphens between syllables, using nuqta (ज़, ख़, ग़, फ़) accurately.' },
+    romanizedFull: { type: Type.STRING, description: 'Hyphenated Romanized pronunciation with UPPERCASE stressed syllable, e.g. fri-ZÖ-ah.' },
+    ipa: { type: Type.STRING, description: 'Standard German IPA transcription enclosed in slashes, e.g. /fʁiˈzøːɐ̯/.' },
+    stressSummary: { type: Type.STRING, description: 'Short phrase stating which syllable carries primary stress.' },
+    originNote: { type: Type.STRING, description: '1-2 sentences explaining spelling vs. pronunciation quirks, loanword origin, or compound structure.' },
+    categories: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: '1 to 3 matching tags from: umlauts, ch-r, loanwords, everyday',
+    },
+    syllables: {
+      type: Type.ARRAY,
+      description: 'Ordered sound-by-sound or syllable-by-syllable breakdown tailored specifically for native Hindi speakers.',
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          segment: { type: Type.STRING, description: 'The German spelling chunk, e.g. Fri-, -s-, -eu-, -r.' },
+          devanagari: { type: Type.STRING, description: 'Devanagari guide for this chunk, e.g. फ़्री, ज़, यॉ / ओ, अ.' },
+          romanized: { type: Type.STRING, description: 'Short Romanized cue for this chunk.' },
+          ipa: { type: Type.STRING, description: 'IPA for this chunk enclosed in slashes.' },
+          stressed: { type: Type.BOOLEAN, description: 'True if this chunk belongs to the primary stressed syllable.' },
+          difficulty: {
+            type: Type.STRING,
+            description: 'One of: hindi-match, subtle-shift, new-sound',
+          },
+          explanation: {
+            type: Type.STRING,
+            description: 'Clear 1-2 sentence coaching specifically for Hindi native speakers referencing familiar Hindi/Urdu words (e.g. ज़मीन, ख़ुश, एक, ओ) or English anchors.',
+          },
+          mouthSteps: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: 'Optional 2-step lip & tongue physical instructions when the sound does not exist in Hindi (like ö, ü, ich-Laut /ç/). Empty array if straightforward.',
+          },
+          quickShortcut: {
+            type: Type.STRING,
+            description: 'Optional forgiving shortcut for Hindi speakers if the exact sound feels unnatural at first.',
+          },
+          articulation: {
+            type: Type.OBJECT,
+            properties: {
+              lipShape: {
+                type: Type.STRING,
+                description: 'One of: tight-circle, rounded, spread, neutral, open',
+              },
+              lipLabel: { type: Type.STRING, description: 'Short label describing lip posture.' },
+              tonguePosition: {
+                type: Type.STRING,
+                description: 'One of: front-high, front-mid, central, back-throat, alveolar-buzz, teeth-lip',
+              },
+              tongueLabel: { type: Type.STRING, description: 'Short label describing tongue/airflow position.' },
+              hindiAnchor: { type: Type.STRING, description: 'Compact Hindi phonetic anchor, e.g. Lips of ओ + tongue of ए.' },
+              targetIpa: { type: Type.STRING, description: 'IPA symbol for the key phoneme.' },
+            },
+            required: ['lipShape', 'lipLabel', 'tonguePosition', 'tongueLabel', 'hindiAnchor', 'targetIpa'],
+          },
+        },
+        required: ['segment', 'devanagari', 'romanized', 'ipa', 'stressed', 'difficulty', 'explanation', 'articulation'],
+      },
+    },
+    example: {
+      type: Type.OBJECT,
+      properties: {
+        german: { type: Type.STRING, description: 'A practical, natural German sentence using the word.' },
+        devanagari: { type: Type.STRING, description: 'Full Devanagari pronunciation of the German sentence.' },
+        english: { type: Type.STRING, description: 'Natural English translation.' },
+        hindi: { type: Type.STRING, description: 'Natural Hindi translation in Devanagari.' },
+      },
+      required: ['german', 'devanagari', 'english', 'hindi'],
+    },
+  },
+  required: [
+    'word',
+    'article',
+    'partOfSpeech',
+    'cefr',
+    'englishMeaning',
+    'hindiMeaning',
+    'devanagariFull',
+    'romanizedFull',
+    'ipa',
+    'stressSummary',
+    'originNote',
+    'categories',
+    'syllables',
+    'example',
+  ],
+};
+
+const PRONOUNCE_SYSTEM_INSTRUCTION = `You are a German phonetics coach writing a crystal-clear pronunciation dictionary entry specifically for native Hindi speakers.
+
+Follow this exact linguistic coaching style:
+- Write accurate Devanagari approximations using proper nuqta dots where helpful: ज़ (/z/ as in ज़मीन), ख़ (/x/ as in ख़बर), ग़ (soft uvular /ʁ/), फ़ (/f/ as in फ़ोन).
+- Never confuse German s before a vowel (/z/ -> ज़) with German z (/ts/ -> त्स).
+- Clearly distinguish German ich-Laut (/ç/, soft front breathy ह्य/श्य after i, e, ä, ö, ü, ei, eu, r, l, n) from ach-Laut (/x/, exact Hindi/Urdu throat ख़ after a, o, u, au).
+- Explain vocalized final -r (/ɐ̯/ -> soft अ) vs. initial/prevocalic uvular r (/ʁ/ -> very soft ख़/ग़ in the back of the throat, not rolled Hindi र).
+- For vowels that do not exist in Hindi like ö (/øː/, /œ/) and ü (/yː/, /ʏ/), always include clear 2-step mouthSteps (e.g., lips shaped like ओ/ऊ + tongue saying ए/ई) and a reassuring quickShortcut.
+- If the user types an English or Hindi word (like "hospital" or "धन्यवाद"), translate it to the standard German equivalent first and break down that German word.
+- If the user types a German word without umlauts (like "Munchen" or "Entschuldigung"), normalize to the proper German spelling ("München", "Entschuldigung").
+- Keep explanations crisp, warm, human, and free of filler.`;
+
+const ttsCache = new Map<string, string>();
+const MAX_TTS_CACHE = 60;
+
+function isTransientError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes('503') ||
+    msg.includes('UNAVAILABLE') ||
+    msg.includes('high demand') ||
+    msg.includes('429') ||
+    msg.includes('DEADLINE_EXCEEDED')
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function generatePronunciationWithFailover(
+  ai: GoogleGenAI,
+  rawQuery: string,
+): Promise<string> {
+  const attempts: { model: string; useThinking: boolean; waitBeforeMs: number }[] = [
+    { model: 'gemini-4-hydrogen', useThinking: true, waitBeforeMs: 0 },
+    { model: 'gemini-4-hydrogen', useThinking: true, waitBeforeMs: 700 },
+    { model: 'gemini-3.1-flash-lite', useThinking: false, waitBeforeMs: 250 },
+    { model: 'gemini-3.1-flash-lite', useThinking: false, waitBeforeMs: 900 },
+  ];
+
+  let lastError: unknown;
+  for (const attempt of attempts) {
+    if (attempt.waitBeforeMs > 0) {
+      await delay(attempt.waitBeforeMs);
+    }
+    try {
+      const config = attempt.useThinking
+        ? {
+            systemInstruction: PRONOUNCE_SYSTEM_INSTRUCTION,
+            responseMimeType: 'application/json',
+            responseSchema: PRONOUNCE_SCHEMA,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          }
+        : {
+            systemInstruction: PRONOUNCE_SYSTEM_INSTRUCTION,
+            responseMimeType: 'application/json',
+            responseSchema: PRONOUNCE_SCHEMA,
+          };
+
+      const response = await ai.models.generateContent({
+        model: attempt.model,
+        contents: `Provide a complete German pronunciation dictionary entry for native Hindi speakers for the query: "${rawQuery}".`,
+        config,
+      });
+
+      const rawText = (response.text ?? '').trim();
+      if (rawText) {
+        return rawText;
+      }
+      lastError = new Error(`Empty response from ${attempt.model}`);
+    } catch (err) {
+      lastError = err;
+      if (!isTransientError(err)) {
+        // Still allow failover from gemini-4-hydrogen to gemini-3.1-flash-lite once
+        if (attempt.model === 'gemini-3.1-flash-lite') {
+          throw err;
+        }
+      }
+    }
+  }
+  throw lastError ?? new Error('Unable to generate pronunciation breakdown.');
+}
+
+async function generateTtsWithRetry(
+  ai: GoogleGenAI,
+  text: string,
+  slow: boolean,
+  ipa?: string,
+): Promise<string | undefined> {
+  const attempts = buildGermanTtsAttempts({ text, slow, ipa });
+
+  let lastError: unknown;
+  for (const attempt of attempts) {
+    if (attempt.waitBeforeMs > 0) {
+      await delay(attempt.waitBeforeMs);
+    }
+    try {
+      const speechConfig: {
+        languageCode?: string;
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: string } };
+      } = {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName: 'Kore' },
+        },
+      };
+      if (attempt.languageCode) {
+        speechConfig.languageCode = attempt.languageCode;
+      }
+
+      const response = await ai.models.generateContent({
+        model: attempt.model,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: attempt.text,
+                speechMetadata: { style: attempt.style },
+              },
+            ],
+          },
+        ],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig,
+        },
+      });
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) return base64Audio;
+    } catch (err) {
+      lastError = err;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      // Stop early only on hard auth/permission errors; otherwise continue failover ladder
+      if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('PERMISSION_DENIED')) {
+        throw err;
+      }
+    }
+  }
+  if (lastError) throw lastError;
+  return undefined;
+}
+
+async function startServer() {
+  const app = express();
+  app.use(express.json({ limit: '1mb' }));
+
+  // Pre-warm the 382k-word in-repo German dictionary asynchronously
+  void germanLexicon.ensureLoaded();
+
+  app.get('/api/health', (_req, res) => {
+    res.json({ ok: true, dictionaryEntries: germanLexicon.totalEntries });
+  });
+
+  app.get('/api/dictionary/stats', async (_req, res) => {
+    await germanLexicon.ensureLoaded();
+    res.json({
+      totalEntries: germanLexicon.totalEntries,
+      ready: germanLexicon.isReady,
+    });
+  });
+
+  app.get('/api/suggest', async (req, res) => {
+    await germanLexicon.ensureLoaded();
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    const rawLimit = Number(req.query.limit);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 20) : 10;
+    if (!q) {
+      res.json({ suggestions: [], totalEntries: germanLexicon.totalEntries });
+      return;
+    }
+    const suggestions = germanLexicon.suggest(q, limit);
+    res.json({ suggestions, totalEntries: germanLexicon.totalEntries });
+  });
+
+  app.get('/api/lookup', async (req, res) => {
+    await germanLexicon.ensureLoaded();
+    const word = typeof req.query.word === 'string' ? req.query.word.trim() : '';
+    if (!word) {
+      res.status(400).json({ error: 'Please provide a German word to look up.' });
+      return;
+    }
+    if (word.length > 80) {
+      res.status(400).json({ error: 'Word or phrase must be under 80 characters.' });
+      return;
+    }
+    const entry = germanLexicon.lookupWord(word);
+    if (!entry) {
+      res.status(404).json({ error: 'No entry found.' });
+      return;
+    }
+    res.json({ entry });
+  });
+
+  app.post('/api/pronounce', async (req, res) => {
+    const rawQuery = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
+    if (!rawQuery) {
+      res.status(400).json({ error: 'Please enter a German word or phrase to break down.' });
+      return;
+    }
+    if (rawQuery.length > 80) {
+      res.status(400).json({ error: 'Please enter a single German word or short phrase (under 80 characters).' });
+      return;
+    }
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'Live pronunciation lookup is unavailable right now because the Gemini API key is not configured.',
+      });
+      return;
+    }
+
+    try {
+      const rawText = await generatePronunciationWithFailover(ai, rawQuery);
+      const parsed = JSON.parse(rawText);
+      res.json({ entry: parsed });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to generate pronunciation breakdown right now.';
+      console.error('[api/pronounce] Error:', message);
+      res.status(502).json({
+        error: 'Could not reach the pronunciation service right now. You can retry or browse the built-in lexicon.',
+      });
+    }
+  });
+
+  app.post('/api/tts', async (req, res) => {
+    const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+    const slow = Boolean(req.body?.slow);
+    const ipa = typeof req.body?.ipa === 'string' ? req.body.ipa.trim().slice(0, 80) : undefined;
+
+    if (!text) {
+      res.status(400).json({ error: 'Missing text to pronounce.' });
+      return;
+    }
+    if (text.length > 220) {
+      res.status(400).json({ error: 'Text is too long for audio playback.' });
+      return;
+    }
+
+    const cacheKey = `de-v2::${slow ? 'slow' : 'normal'}::${text.toLowerCase()}::${ipa ?? ''}`;
+    const cached = ttsCache.get(cacheKey);
+    if (cached) {
+      res.json({ audioBase64: cached, mimeType: 'audio/wav', cached: true });
+      return;
+    }
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(503).json({ error: 'Audio service is unavailable because the API key is not configured.' });
+      return;
+    }
+
+    try {
+      const base64Audio = await generateTtsWithRetry(ai, text, slow, ipa);
+      if (!base64Audio) {
+        res.status(502).json({ error: 'Audio could not be generated for this word.' });
+        return;
+      }
+
+      if (ttsCache.size >= MAX_TTS_CACHE) {
+        const oldestKey = ttsCache.keys().next().value;
+        if (oldestKey) ttsCache.delete(oldestKey);
+      }
+      ttsCache.set(cacheKey, base64Audio);
+
+      res.json({ audioBase64: base64Audio, mimeType: 'audio/wav', cached: false });
+    } catch (err) {
+      const rawMsg = err instanceof Error ? err.message : 'TTS generation failed.';
+      const status =
+        typeof err === 'object' && err !== null && 'status' in err
+          ? Number((err as { status?: unknown }).status)
+          : undefined;
+      console.error('[api/tts] Error:', status ?? '', rawMsg);
+
+      let userError = 'Unable to synthesize native German audio right now.';
+      let errorCode = 'TTS_UPSTREAM_ERROR';
+      if (rawMsg.includes('API_KEY_INVALID') || rawMsg.includes('PERMISSION_DENIED') || status === 403) {
+        userError = 'Native German TTS requires a valid Gemini API key in Settings > Secrets.';
+        errorCode = 'API_KEY_OR_PERMISSION';
+      } else if (status === 429 || rawMsg.includes('RESOURCE_EXHAUSTED')) {
+        userError = 'Audio service is temporarily busy (rate limit). Please try again in a moment.';
+        errorCode = 'RATE_LIMITED';
+      } else if (status === 404 || rawMsg.includes('NOT_FOUND')) {
+        userError = 'The configured German audio model was not found.';
+        errorCode = 'MODEL_NOT_FOUND';
+      } else if (status === 400 || rawMsg.includes('INVALID_ARGUMENT')) {
+        userError = 'Audio request parameters were rejected by the speech service.';
+        errorCode = 'INVALID_ARGUMENT';
+      }
+
+      res.status(502).json({
+        error: userError,
+        errorCode,
+      });
+    }
+  });
+
+  const A1_WRITING_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+      totalScore: { type: Type.INTEGER, description: 'Total score out of 25 (sum of taskCompletion + grammarAndVocab + structure).' },
+      maxScore: { type: Type.INTEGER, description: 'Always 25.' },
+      passed: { type: Type.BOOLEAN, description: 'True if totalScore >= 15 (Goethe A1 60% pass mark).' },
+      taskCompletion: { type: Type.INTEGER, description: 'Score 0 to 10 for addressing all 3 required prompt bullet points.' },
+      grammarAndVocab: { type: Type.INTEGER, description: 'Score 0 to 10 for A1-level German grammar, V2 word order, articles, and spelling.' },
+      structure: { type: Type.INTEGER, description: 'Score 0 to 5 for appropriate German salutation (Anrede) and sign-off (Grußformel).' },
+      correctedGerman: { type: Type.STRING, description: 'Polished, natural Goethe A1 German version of the learner email.' },
+      feedbackEnglish: { type: Type.STRING, description: 'Encouraging, concise 2-sentence examiner feedback in English.' },
+      feedbackHindi: { type: Type.STRING, description: 'Encouraging, concise 2-sentence examiner feedback in natural Hindi (Devanagari).' },
+      strengths: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: '1 to 3 specific things the learner did well.',
+      },
+      improvements: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: '1 to 3 concrete tips to score higher on Goethe-Zertifikat A1 Schreiben.',
+      },
+    },
+    required: [
+      'totalScore',
+      'maxScore',
+      'passed',
+      'taskCompletion',
+      'grammarAndVocab',
+      'structure',
+      'correctedGerman',
+      'feedbackEnglish',
+      'feedbackHindi',
+      'strengths',
+      'improvements',
+    ],
+  };
+
+  app.post('/api/a1/grade-writing', async (req, res) => {
+    const promptTitle = typeof req.body?.promptTitle === 'string' ? req.body.promptTitle.trim().slice(0, 140) : '';
+    const rawBullets = Array.isArray(req.body?.bulletPoints) ? req.body.bulletPoints : [];
+    const bulletPoints: string[] = rawBullets
+      .filter((b: unknown): b is string => typeof b === 'string' && b.trim().length > 0)
+      .slice(0, 5)
+      .map((b: string) => b.trim().slice(0, 160));
+    const learnerText = typeof req.body?.learnerText === 'string' ? req.body.learnerText.trim() : '';
+
+    if (learnerText.length < 10) {
+      res.status(400).json({ error: 'Please write at least a short German message (10+ characters) before evaluating.' });
+      return;
+    }
+    if (learnerText.length > 1500) {
+      res.status(400).json({ error: 'Please keep your A1 practice email under 1500 characters.' });
+      return;
+    }
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'AI Writing Coach is unavailable right now because the Gemini API key is not configured.',
+      });
+      return;
+    }
+
+    const gradingAttempts: { model: string; useThinking: boolean; waitBeforeMs: number }[] = [
+      { model: 'gemini-4-hydrogen', useThinking: true, waitBeforeMs: 0 },
+      { model: 'gemini-3.1-flash-lite', useThinking: false, waitBeforeMs: 250 },
+    ];
+
+    const promptContent = [
+      `Evaluate this Goethe-Zertifikat A1 (Start Deutsch 1) Schreiben Teil 2 email written by a native Hindi speaker.`,
+      promptTitle ? `Task: ${promptTitle}` : '',
+      bulletPoints.length > 0 ? `Required bullet points:\n${bulletPoints.map((b, i) => `${i + 1}. ${b}`).join('\n')}` : '',
+      `Learner's German submission:\n"""\n${learnerText}\n"""`,
+      `Grade strictly on the 25-point Goethe A1 scale (10 pts task completion, 10 pts A1 grammar & vocabulary, 5 pts greeting/closing structure). Pass mark is 15/25 (60%).`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    let lastErr: unknown;
+    for (const attempt of gradingAttempts) {
+      if (attempt.waitBeforeMs > 0) await delay(attempt.waitBeforeMs);
+      try {
+        const config = attempt.useThinking
+          ? {
+              systemInstruction:
+                'You are a certified Goethe-Zertifikat A1 examiner coaching native Hindi speakers. Be accurate, fair to CEFR A1 expectations, and encouraging in both English and Devanagari Hindi.',
+              responseMimeType: 'application/json',
+              responseSchema: A1_WRITING_SCHEMA,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            }
+          : {
+              systemInstruction:
+                'You are a certified Goethe-Zertifikat A1 examiner coaching native Hindi speakers. Be accurate, fair to CEFR A1 expectations, and encouraging in both English and Devanagari Hindi.',
+              responseMimeType: 'application/json',
+              responseSchema: A1_WRITING_SCHEMA,
+            };
+
+        const response = await ai.models.generateContent({
+          model: attempt.model,
+          contents: promptContent,
+          config,
+        });
+        const rawText = (response.text ?? '').trim();
+        if (rawText) {
+          const parsed = JSON.parse(rawText);
+          const taskCompletion = Math.min(10, Math.max(0, Math.round(Number(parsed.taskCompletion) || 0)));
+          const grammarAndVocab = Math.min(10, Math.max(0, Math.round(Number(parsed.grammarAndVocab) || 0)));
+          const structure = Math.min(5, Math.max(0, Math.round(Number(parsed.structure) || 0)));
+          const totalScore = Math.min(25, Math.max(0, taskCompletion + grammarAndVocab + structure));
+
+          res.json({
+            evaluation: {
+              totalScore,
+              maxScore: 25,
+              passed: totalScore >= 15,
+              taskCompletion,
+              grammarAndVocab,
+              structure,
+              correctedGerman: String(parsed.correctedGerman || ''),
+              feedbackEnglish: String(parsed.feedbackEnglish || ''),
+              feedbackHindi: String(parsed.feedbackHindi || ''),
+              strengths: Array.isArray(parsed.strengths) ? parsed.strengths.slice(0, 4).map(String) : [],
+              improvements: Array.isArray(parsed.improvements) ? parsed.improvements.slice(0, 4).map(String) : [],
+            },
+          });
+          return;
+        }
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    console.error('[api/a1/grade-writing] Error:', lastErr instanceof Error ? lastErr.message : String(lastErr));
+    res.status(502).json({
+      error: 'Could not reach the AI Writing Coach right now. Compare your draft with the model answer below or retry in a moment.',
+    });
+  });
+
+  if (!isProd) {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.resolve(__dirname, 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      const indexFile = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+      } else {
+        res.status(404).send('Application bundle not found.');
+      }
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`LautBhasha server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();

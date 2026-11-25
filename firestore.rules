@@ -1,0 +1,227 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 0: Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Hardened global primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Pillar 5: Bounded string array validator
+    function isValidStringList(arr, maxLen) {
+      return arr is list
+        && arr.size() <= maxLen
+        && (arr.size() == 0 || (arr[0] is string && arr[0].size() >= 1 && arr[0].size() <= 80));
+    }
+
+    // Pillar 2: Validation Blueprint for UserProgress
+    function isValidUserProgress(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'completedLessonIds',
+          'masteredVocabIds',
+          'savedWordIds',
+          'lastActiveModuleId',
+          'lastActiveTab',
+          'bestMockScore',
+          'totalMockAttempts',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'completedLessonIds',
+          'masteredVocabIds',
+          'savedWordIds',
+          'lastActiveModuleId',
+          'lastActiveTab',
+          'bestMockScore',
+          'totalMockAttempts',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.ownerId is string
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidId(data.ownerId)
+        && isValidStringList(data.completedLessonIds, 50)
+        && isValidStringList(data.masteredVocabIds, 200)
+        && isValidStringList(data.savedWordIds, 100)
+        && data.lastActiveModuleId is string
+        && data.lastActiveModuleId.size() >= 1
+        && data.lastActiveModuleId.size() <= 64
+        && data.lastActiveModuleId.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.lastActiveTab is string
+        && data.lastActiveTab.size() >= 1
+        && data.lastActiveTab.size() <= 32
+        && data.lastActiveTab in ['modules', 'hoeren', 'lesen', 'schreiben', 'sprechen', 'mock-exam']
+        && data.bestMockScore is number
+        && data.bestMockScore >= 0
+        && data.bestMockScore <= 100
+        && data.totalMockAttempts is number
+        && data.totalMockAttempts >= 0
+        && data.totalMockAttempts <= 1000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Pillar 2: Validation Blueprint for ExamAttempt
+    function isValidSectionScores(scores) {
+      return scores is map
+        && scores.keys().hasAll(['hoeren', 'lesen', 'schreiben', 'sprechen'])
+        && scores.keys().hasOnly(['hoeren', 'lesen', 'schreiben', 'sprechen'])
+        && scores.hoeren is number && scores.hoeren >= 0 && scores.hoeren <= 25
+        && scores.lesen is number && scores.lesen >= 0 && scores.lesen <= 25
+        && scores.schreiben is number && scores.schreiben >= 0 && scores.schreiben <= 25
+        && scores.sprechen is number && scores.sprechen >= 0 && scores.sprechen <= 25;
+    }
+
+    function isValidExamAttempt(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'examType',
+          'status',
+          'score',
+          'maxScore',
+          'passed',
+          'sectionScores',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'examType',
+          'status',
+          'score',
+          'maxScore',
+          'passed',
+          'sectionScores',
+          'createdAt'
+        ])
+        && data.ownerId is string
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidId(data.ownerId)
+        && data.examType is string
+        && data.examType.size() >= 1
+        && data.examType.size() <= 32
+        && data.examType in ['mock-full', 'hoeren', 'lesen', 'schreiben', 'sprechen']
+        && data.status is string
+        && data.status.size() >= 1
+        && data.status.size() <= 16
+        && data.status == 'completed'
+        && data.score is number
+        && data.score >= 0
+        && data.score <= 100
+        && data.maxScore is number
+        && data.maxScore >= 1
+        && data.maxScore <= 100
+        && data.score <= data.maxScore
+        && data.passed is bool
+        && isValidSectionScores(data.sectionScores)
+        && data.createdAt is timestamp;
+    }
+
+    // Collection 1: /users/{userId} — Private A1 progress & bookmarks (PII-free)
+    match /users/{userId} {
+      // Evaluation order: Auth -> Static ID -> Ownership (no list to prevent scraping)
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProgress(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      // Action-based update pattern wrapped by validation blueprint
+      allow update: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProgress(incoming(), userId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Sync lesson, vocabulary, and dictionary bookmark progress
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'completedLessonIds',
+            'masteredVocabIds',
+            'savedWordIds',
+            'lastActiveModuleId',
+            'lastActiveTab',
+            'updatedAt'
+          ])
+          ||
+          // Action 2: Record mock exam summary stats alongside study progress
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'completedLessonIds',
+            'masteredVocabIds',
+            'savedWordIds',
+            'lastActiveModuleId',
+            'lastActiveTab',
+            'bestMockScore',
+            'totalMockAttempts',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // Collection 2: /users/{userId}/examAttempts/{attemptId}
+      match /examAttempts/{attemptId} {
+        // Master Gate: verify parent /users/{userId} exists on single-doc ops
+        allow get: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(attemptId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        // Pillar 8: Secure list query enforcing resource.data.ownerId without get()/exists()
+        allow list: if isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+
+        // Pillar 7: Atomicity Guarantee — allow create when parent exists or is created in same batch
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(attemptId)
+          && isValidExamAttempt(incoming(), userId)
+          && incoming().createdAt == request.time
+          && (
+            exists(/databases/$(database)/documents/users/$(userId))
+            || existsAfter(/databases/$(database)/documents/users/$(userId))
+          );
+
+        // Pillar 6: Terminal State Locking — completed exam attempts are immutable
+        allow update: if false;
+
+        allow delete: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(attemptId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+      }
+    }
+  }
+}
