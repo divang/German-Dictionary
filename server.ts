@@ -321,6 +321,274 @@ async function startServer() {
     res.json({ entry });
   });
 
+  const MEANING_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+      englishMeaning: {
+        type: Type.STRING,
+        description: 'Concise, clear English translation(s) of the German word (1 to 4 short senses separated by commas, under 120 characters).',
+      },
+      hindiMeaning: {
+        type: Type.STRING,
+        description: 'Accurate, everyday Hindi meaning in Devanagari script (1 to 3 natural Hindi equivalents separated by commas, under 120 characters).',
+      },
+      exampleHindi: {
+        type: Type.STRING,
+        description: 'Natural Hindi translation in Devanagari of the supplied German example sentence, or empty string if none supplied.',
+      },
+    },
+    required: ['englishMeaning', 'hindiMeaning', 'exampleHindi'],
+  };
+
+  const meaningCache = new Map<
+    string,
+    { englishMeaning: string; hindiMeaning: string; exampleHindi: string }
+  >();
+  const MAX_MEANING_CACHE = 400;
+
+  app.post('/api/translate-meaning', async (req, res) => {
+    const word = typeof req.body?.word === 'string' ? req.body.word.trim().slice(0, 100) : '';
+    const article = typeof req.body?.article === 'string' ? req.body.article.trim().slice(0, 10) : '';
+    const partOfSpeech =
+      typeof req.body?.partOfSpeech === 'string' ? req.body.partOfSpeech.trim().slice(0, 60) : '';
+    const englishHint =
+      typeof req.body?.englishHint === 'string' ? req.body.englishHint.trim().slice(0, 200) : '';
+    const exampleGerman =
+      typeof req.body?.exampleGerman === 'string' ? req.body.exampleGerman.trim().slice(0, 220) : '';
+
+    if (!word) {
+      res.status(400).json({ error: 'Please provide a German word to translate.' });
+      return;
+    }
+
+    const cacheKey = `${word.toLowerCase()}::${partOfSpeech.toLowerCase()}::${exampleGerman.toLowerCase()}`;
+    const cached = meaningCache.get(cacheKey);
+    if (cached) {
+      res.json({ ...cached, cached: true });
+      return;
+    }
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'Translation service is unavailable because the Gemini API key is not configured.',
+      });
+      return;
+    }
+
+    const hasUsableHint =
+      englishHint.length > 0 && !englishHint.toLowerCase().includes('looked up via phonetic breakdown');
+
+    const promptLines = [
+      `Translate the German word "${article ? `${article} ` : ''}${word}"${partOfSpeech ? ` (${partOfSpeech})` : ''} for a native Hindi speaker learning German.`,
+      hasUsableHint ? `Dictionary English gloss hint: "${englishHint}". Keep or refine this concise English meaning.` : 'Provide a concise, accurate English meaning.',
+      'Provide the most natural everyday Hindi meaning in Devanagari script (e.g., for "Krankenhaus" -> "अस्पताल"; for "biologisch" -> "जैविक, प्राकृतिक"; for "Entschuldigung" -> "माफ़ कीजिए, क्षमा").',
+      exampleGerman
+        ? `Also translate this German example sentence into natural Devanagari Hindi: "${exampleGerman}"`
+        : 'Leave exampleHindi as an empty string.',
+    ].join('\n');
+
+    const attempts: { model: string; waitBeforeMs: number }[] = [
+      { model: 'gemini-3.1-flash-lite', waitBeforeMs: 0 },
+      { model: 'gemini-4-hydrogen', waitBeforeMs: 250 },
+    ];
+
+    let lastErr: unknown;
+    for (const attempt of attempts) {
+      if (attempt.waitBeforeMs > 0) await delay(attempt.waitBeforeMs);
+      try {
+        const response = await ai.models.generateContent({
+          model: attempt.model,
+          contents: promptLines,
+          config: {
+            systemInstruction:
+              'You are a precise German–English–Hindi lexicographer. Return concise, accurate English and Devanagari Hindi meanings with zero filler.',
+            responseMimeType: 'application/json',
+            responseSchema: MEANING_SCHEMA,
+          },
+        });
+
+        const rawText = (response.text ?? '').trim();
+        if (rawText) {
+          const parsed = JSON.parse(rawText) as {
+            englishMeaning?: string;
+            hindiMeaning?: string;
+            exampleHindi?: string;
+          };
+          const englishMeaning = String(parsed.englishMeaning ?? (hasUsableHint ? englishHint : ''))
+            .trim()
+            .slice(0, 240);
+          const hindiMeaning = String(parsed.hindiMeaning ?? '').trim().slice(0, 240);
+          const exampleHindi = String(parsed.exampleHindi ?? '').trim().slice(0, 280);
+
+          if (englishMeaning || hindiMeaning) {
+            if (meaningCache.size >= MAX_MEANING_CACHE) {
+              const oldest = meaningCache.keys().next().value;
+              if (oldest) meaningCache.delete(oldest);
+            }
+            const value = { englishMeaning, hindiMeaning, exampleHindi };
+            meaningCache.set(cacheKey, value);
+            res.json({ ...value, cached: false });
+            return;
+          }
+        }
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    console.error('[api/translate-meaning] Error:', lastErr instanceof Error ? lastErr.message : String(lastErr));
+    res.status(502).json({ error: 'Could not translate meaning right now.' });
+  });
+
+  const SENTENCE_TRANSLATION_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+      germanSentence: {
+        type: Type.STRING,
+        description: 'Natural, simple everyday German translation (CEFR A1/A2 level, short and clear).',
+      },
+      devanagariSentence: {
+        type: Type.STRING,
+        description: 'Full German pronunciation written in Hindi Devanagari with hyphens between syllables and accurate nuqta dots (ज़, ख़, ग़, फ़).',
+      },
+      hindiSentence: {
+        type: Type.STRING,
+        description: 'Natural everyday Hindi translation of the full sentence in Devanagari script.',
+      },
+      cefr: {
+        type: Type.STRING,
+        description: 'CEFR difficulty of the simple German sentence: either A1 or A2.',
+      },
+      grammarTip: {
+        type: Type.STRING,
+        description: '1 to 2 concise sentences explaining the simple German word order or structure for an English/Hindi speaker.',
+      },
+      words: {
+        type: Type.ARRAY,
+        description: 'Exact ordered word-by-word breakdown of every word in germanSentence (excluding standalone punctuation).',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            german: { type: Type.STRING, description: 'Exact word as it appears in the German sentence (without trailing punctuation).' },
+            baseForm: { type: Type.STRING, description: 'Dictionary base form without der/die/das (e.g. infinitive for verbs, singular noun without article).' },
+            article: { type: Type.STRING, description: 'For German nouns only: der, die, or das. Empty string for non-nouns.' },
+            devanagari: { type: Type.STRING, description: 'Hindi Devanagari pronunciation for this word.' },
+            english: { type: Type.STRING, description: 'Concise English meaning of this word in the sentence.' },
+            hindi: { type: Type.STRING, description: 'Concise Hindi meaning in Devanagari for this word.' },
+            role: { type: Type.STRING, description: 'Short learner-friendly grammar role (e.g. Verb, Masculine noun, Pronoun, Preposition, Article).' },
+          },
+          required: ['german', 'baseForm', 'article', 'devanagari', 'english', 'hindi', 'role'],
+        },
+      },
+    },
+    required: ['germanSentence', 'devanagariSentence', 'hindiSentence', 'cefr', 'grammarTip', 'words'],
+  };
+
+  const sentenceCache = new Map<string, Record<string, unknown>>();
+  const MAX_SENTENCE_CACHE = 200;
+
+  app.post('/api/translate-sentence', async (req, res) => {
+    const english = typeof req.body?.english === 'string' ? req.body.english.trim() : '';
+    const tone = req.body?.tone === 'casual' ? 'casual' : 'polite';
+
+    if (!english || english.length < 2) {
+      res.status(400).json({ error: 'Please enter an English sentence (at least 2 characters).' });
+      return;
+    }
+    if (english.length > 260) {
+      res.status(400).json({ error: 'Please keep the English sentence under 260 characters.' });
+      return;
+    }
+
+    const cacheKey = `${tone}::${english.toLowerCase()}`;
+    const cached = sentenceCache.get(cacheKey);
+    if (cached) {
+      res.json({ translation: cached, cached: true });
+      return;
+    }
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'Sentence translator is unavailable right now because the Gemini API key is not configured.',
+      });
+      return;
+    }
+
+    const toneInstruction =
+      tone === 'casual'
+        ? 'Use simple, friendly informal German ("du" form if addressing someone).'
+        : 'Use simple, polite everyday German ("Sie" form if addressing someone, ideal for Goethe A1/A2).';
+
+    const promptContent = [
+      `Convert this English sentence into a simple, natural everyday German sentence (A1/A2 level): "${english}"`,
+      toneInstruction,
+      'Provide:',
+      '1. The simple German sentence.',
+      '2. Full Devanagari pronunciation for Hindi native speakers (use nuqta dots ज़, ख़, ग़, फ़ accurately).',
+      '3. Natural Hindi sentence meaning in Devanagari.',
+      '4. A complete ordered word-by-word breakdown covering EVERY word in the German sentence with its dictionary baseForm, noun gender article (der/die/das or ""), Devanagari pronunciation, English meaning, Hindi meaning, and short grammar role.',
+      '5. A 1-2 sentence beginner-friendly grammar tip explaining the German word order.',
+    ].join('\n');
+
+    const attempts: { model: string; useThinking: boolean; waitBeforeMs: number }[] = [
+      { model: 'gemini-3.1-flash-lite', useThinking: false, waitBeforeMs: 0 },
+      { model: 'gemini-4-hydrogen', useThinking: true, waitBeforeMs: 250 },
+    ];
+
+    let lastErr: unknown;
+    for (const attempt of attempts) {
+      if (attempt.waitBeforeMs > 0) await delay(attempt.waitBeforeMs);
+      try {
+        const config = attempt.useThinking
+          ? {
+              systemInstruction:
+                'You are a friendly German A1/A2 teacher coaching native Hindi speakers. Produce simple, natural, grammatically accurate German sentences with exact word-by-word English & Devanagari Hindi meanings and accurate Devanagari pronunciation.',
+              responseMimeType: 'application/json',
+              responseSchema: SENTENCE_TRANSLATION_SCHEMA,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            }
+          : {
+              systemInstruction:
+                'You are a friendly German A1/A2 teacher coaching native Hindi speakers. Produce simple, natural, grammatically accurate German sentences with exact word-by-word English & Devanagari Hindi meanings and accurate Devanagari pronunciation.',
+              responseMimeType: 'application/json',
+              responseSchema: SENTENCE_TRANSLATION_SCHEMA,
+            };
+
+        const response = await ai.models.generateContent({
+          model: attempt.model,
+          contents: promptContent,
+          config,
+        });
+
+        const rawText = (response.text ?? '').trim();
+        if (rawText) {
+          const parsed = JSON.parse(rawText) as Record<string, unknown>;
+          if (typeof parsed.germanSentence === 'string' && parsed.germanSentence.trim()) {
+            if (sentenceCache.size >= MAX_SENTENCE_CACHE) {
+              const oldest = sentenceCache.keys().next().value;
+              if (oldest) sentenceCache.delete(oldest);
+            }
+            sentenceCache.set(cacheKey, parsed);
+            res.json({ translation: parsed, cached: false });
+            return;
+          }
+        }
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    console.error(
+      '[api/translate-sentence] Error:',
+      lastErr instanceof Error ? lastErr.message : String(lastErr),
+    );
+    res.status(502).json({
+      error: 'Could not translate your sentence right now. Please try again in a moment.',
+    });
+  });
+
   app.post('/api/pronounce', async (req, res) => {
     const rawQuery = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
     if (!rawQuery) {

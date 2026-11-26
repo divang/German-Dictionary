@@ -146,6 +146,65 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    // Pillar 2: Validation Blueprint for SearchedWord
+    function isValidSearchedWord(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'word',
+          'article',
+          'partOfSpeech',
+          'cefr',
+          'englishMeaning',
+          'hindiMeaning',
+          'devanagariFull',
+          'ipa',
+          'searchCount',
+          'createdAt',
+          'lastSearchedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'word',
+          'article',
+          'partOfSpeech',
+          'cefr',
+          'englishMeaning',
+          'hindiMeaning',
+          'devanagariFull',
+          'ipa',
+          'searchCount',
+          'createdAt',
+          'lastSearchedAt'
+        ])
+        && data.ownerId is string
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidId(data.ownerId)
+        && data.word is string
+        && data.word.size() >= 1
+        && data.word.size() <= 100
+        && data.article is string
+        && data.article.size() <= 10
+        && data.article in ['', 'der', 'die', 'das']
+        && data.partOfSpeech is string
+        && data.partOfSpeech.size() <= 60
+        && data.cefr is string
+        && data.cefr.size() <= 10
+        && data.englishMeaning is string
+        && data.englishMeaning.size() <= 240
+        && data.hindiMeaning is string
+        && data.hindiMeaning.size() <= 240
+        && data.devanagariFull is string
+        && data.devanagariFull.size() <= 180
+        && data.ipa is string
+        && data.ipa.size() <= 120
+        && data.searchCount is number
+        && data.searchCount >= 1
+        && data.searchCount <= 10000
+        && data.createdAt is timestamp
+        && data.lastSearchedAt is timestamp;
+    }
+
     // Collection 1: /users/{userId} — Private A1 progress & bookmarks (PII-free)
     match /users/{userId} {
       // Evaluation order: Auth -> Static ID -> Ownership (no list to prevent scraping)
@@ -220,6 +279,68 @@ service cloud.firestore {
         allow delete: if isOwner(userId)
           && isValidId(userId)
           && isValidId(attemptId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // Collection 3: /users/{userId}/searchedWords/{wordId}
+      match /searchedWords/{wordId} {
+        // Master Gate: verify parent /users/{userId} exists on single-doc ops
+        allow get: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(wordId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        // Pillar 8: Secure list query enforcing resource.data.ownerId without get()/exists()
+        allow list: if isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+
+        // Pillar 7: Atomicity Guarantee — allow create when parent exists or is created in same batch
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(wordId)
+          && isValidSearchedWord(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().lastSearchedAt == request.time
+          && (
+            exists(/databases/$(database)/documents/users/$(userId))
+            || existsAfter(/databases/$(database)/documents/users/$(userId))
+          );
+
+        // Action-based update wrapped by validation blueprint
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(wordId)
+          && isValidSearchedWord(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().lastSearchedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && (
+            // Action 1: Re-search word and refresh pronunciation/meanings & search count
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'word',
+              'article',
+              'partOfSpeech',
+              'cefr',
+              'englishMeaning',
+              'hindiMeaning',
+              'devanagariFull',
+              'ipa',
+              'searchCount',
+              'lastSearchedAt'
+            ])
+            ||
+            // Action 2: Enrich English and Hindi meaning after async translation
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'englishMeaning',
+              'hindiMeaning',
+              'lastSearchedAt'
+            ])
+          );
+
+        allow delete: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(wordId)
           && exists(/databases/$(database)/documents/users/$(userId));
       }
     }

@@ -94,3 +94,19 @@ export interface SoundRule {
   commonMistake: string;
   exampleWordIds: string[];
 }
+
+export interface SearchedWordRecord {
+  id: string;
+  word: string;
+  article: 'der' | 'die' | 'das' | '';
+  partOfSpeech: string;
+  cefr: string;
+  englishMeaning: string;
+  hindiMeaning: string;
+  devanagariFull: string;
+  ipa: string;
+  searchCount: number;
+  createdAtMs: number;
+  lastSearchedAtMs: number;
+}
+

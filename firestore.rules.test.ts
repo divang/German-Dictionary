@@ -19,7 +19,11 @@ test('firestore.rules enforces global default deny, verified users, and zero bla
 
 test('firestore.rules covers every collection declared in firebase-blueprint.json with strict validation', () => {
   const paths = Object.keys(blueprint.firestore);
-  assert.deepEqual(paths.sort(), ['/users/{userId}', '/users/{userId}/examAttempts/{attemptId}']);
+  assert.deepEqual(paths.sort(), [
+    '/users/{userId}',
+    '/users/{userId}/examAttempts/{attemptId}',
+    '/users/{userId}/searchedWords/{wordId}',
+  ]);
 
   // Verify UserProgress validation & action-based updates
   assert.ok(rulesText.includes('function isValidUserProgress(data, userId)'));
@@ -33,6 +37,13 @@ test('firestore.rules covers every collection declared in firebase-blueprint.jso
   assert.ok(rulesText.includes('resource.data.ownerId == request.auth.uid'));
   assert.ok(rulesText.includes('existsAfter(/databases/$(database)/documents/users/$(userId))'));
   assert.ok(rulesText.includes('allow update: if false;'));
+
+  // Verify SearchedWord validation, action-based updates, and bounded strings
+  assert.ok(rulesText.includes('function isValidSearchedWord(data, userId)'));
+  assert.ok(rulesText.includes('match /searchedWords/{wordId}'));
+  assert.ok(rulesText.includes('incoming().lastSearchedAt == request.time'));
+  assert.ok(rulesText.includes('data.hindiMeaning.size() <= 240'));
+  assert.ok(rulesText.includes('data.englishMeaning.size() <= 240'));
 });
 
 test('Dirty Dozen security assertions: rules block all 12 adversarial attack vectors', () => {

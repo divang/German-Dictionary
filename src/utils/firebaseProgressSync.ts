@@ -1,6 +1,7 @@
 import {
   Timestamp,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   limit,
@@ -15,6 +16,8 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import type { A1ExamAttempt, A1UserProgress } from '../types/a1';
+import type { SearchedWordRecord } from '../types/dictionary';
+import { toSafeWordDocId } from './searchedWords';
 import {
   MAX_COMPLETED_LESSONS,
   MAX_MASTERED_VOCAB,
@@ -324,3 +327,187 @@ export function subscribeToExamAttempts(
     },
   );
 }
+
+const VALID_ARTICLES = new Set(['', 'der', 'die', 'das']);
+
+function sanitizeSearchedWordFields(record: SearchedWordRecord) {
+  return {
+    word: record.word.trim().slice(0, 100) || 'Wort',
+    article: VALID_ARTICLES.has(record.article) ? record.article : '',
+    partOfSpeech: record.partOfSpeech.trim().slice(0, 60) || 'German word',
+    cefr: record.cefr.trim().slice(0, 10) || 'A1',
+    englishMeaning: record.englishMeaning.trim().slice(0, 240),
+    hindiMeaning: record.hindiMeaning.trim().slice(0, 240),
+    devanagariFull: record.devanagariFull.trim().slice(0, 180),
+    ipa: record.ipa.trim().slice(0, 120),
+    searchCount: clampNumber(record.searchCount, 1, 10000),
+  };
+}
+
+/**
+ * Permanently upserts a searched German word under /users/{uid}/searchedWords/{wordId}
+ * so words searched on laptop are immediately available for revision on phone.
+ */
+export async function upsertSearchedWordToCloud(
+  uid: string,
+  record: SearchedWordRecord,
+  fallbackProgress: A1UserProgress,
+  fallbackSavedWordIds: string[],
+): Promise<void> {
+  const wordId = /^[a-zA-Z0-9_-]{1,100}$/.test(record.id)
+    ? record.id
+    : toSafeWordDocId(record.word);
+  const wordPath = `users/${uid}/searchedWords/${wordId}`;
+  const userRef = doc(db, 'users', uid);
+  const wordRef = doc(db, 'users', uid, 'searchedWords', wordId);
+  const fields = sanitizeSearchedWordFields(record);
+
+  try {
+    const [userSnap, wordSnap] = await Promise.all([getDoc(userRef), getDoc(wordRef)]);
+
+    if (!userSnap.exists()) {
+      const batch = writeBatch(db);
+      batch.set(userRef, {
+        ownerId: uid,
+        completedLessonIds: sanitizeIdList(fallbackProgress.completedLessonIds, MAX_COMPLETED_LESSONS),
+        masteredVocabIds: sanitizeIdList(fallbackProgress.masteredVocabIds, MAX_MASTERED_VOCAB),
+        savedWordIds: sanitizeIdList(fallbackSavedWordIds, MAX_SAVED_WORDS),
+        lastActiveModuleId: sanitizeModuleId(fallbackProgress.lastActiveModuleId),
+        lastActiveTab: sanitizeA1Tab(fallbackProgress.lastActiveTab),
+        bestMockScore: clampNumber(fallbackProgress.bestMockScore, 0, 100),
+        totalMockAttempts: clampNumber(fallbackProgress.totalMockAttempts, 0, 1000),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      batch.set(wordRef, {
+        ownerId: uid,
+        ...fields,
+        createdAt: serverTimestamp(),
+        lastSearchedAt: serverTimestamp(),
+      });
+      await batch.commit();
+      return;
+    }
+
+    if (wordSnap.exists()) {
+      const existingData = wordSnap.data();
+      const existingEnglish = typeof existingData.englishMeaning === 'string' ? existingData.englishMeaning : '';
+      const existingHindi = typeof existingData.hindiMeaning === 'string' ? existingData.hindiMeaning : '';
+      const existingCount = typeof existingData.searchCount === 'number' ? existingData.searchCount : 1;
+
+      await updateDoc(wordRef, {
+        ...fields,
+        englishMeaning: fields.englishMeaning || existingEnglish,
+        hindiMeaning: fields.hindiMeaning || existingHindi,
+        searchCount: clampNumber(Math.max(fields.searchCount, existingCount), 1, 10000),
+        lastSearchedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(wordRef, {
+        ownerId: uid,
+        ...fields,
+        createdAt: serverTimestamp(),
+        lastSearchedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, wordPath);
+  }
+}
+
+/**
+ * Syncs locally searched words (e.g. from before Google Sign-In) into Firestore
+ * so laptop and phone revision lists merge automatically.
+ */
+export async function syncLocalSearchedWordsToCloud(
+  uid: string,
+  localRecords: SearchedWordRecord[],
+  cloudRecords: SearchedWordRecord[],
+  fallbackProgress: A1UserProgress,
+  fallbackSavedWordIds: string[],
+): Promise<void> {
+  if (localRecords.length === 0) return;
+
+  const cloudById = new Map(cloudRecords.map((item) => [item.id, item]));
+  const toUpload = localRecords
+    .filter((local) => {
+      const existing = cloudById.get(local.id);
+      if (!existing) return true;
+      const addsHindi = Boolean(local.hindiMeaning && !existing.hindiMeaning);
+      const higherCount = local.searchCount > existing.searchCount;
+      return addsHindi || higherCount;
+    })
+    .slice(0, 50);
+
+  for (const record of toUpload) {
+    await upsertSearchedWordToCloud(uid, record, fallbackProgress, fallbackSavedWordIds);
+  }
+}
+
+/**
+ * Subscribes to the user's permanent searched-word history across devices.
+ * Explicitly filters by ownerId == uid to match the Firestore secure-list rule.
+ */
+export function subscribeToSearchedWords(
+  uid: string,
+  onUpdate: (records: SearchedWordRecord[]) => void,
+  onError: (err: Error) => void,
+): () => void {
+  const wordsPath = `users/${uid}/searchedWords`;
+  const wordsQuery = query(
+    collection(db, 'users', uid, 'searchedWords'),
+    where('ownerId', '==', uid),
+    orderBy('lastSearchedAt', 'desc'),
+    limit(200),
+  );
+
+  return onSnapshot(
+    wordsQuery,
+    (querySnap) => {
+      const records: SearchedWordRecord[] = querySnap.docs.map((d) => {
+        const data = d.data();
+        const rawArticle = typeof data.article === 'string' && VALID_ARTICLES.has(data.article)
+          ? (data.article as SearchedWordRecord['article'])
+          : '';
+        return {
+          id: d.id,
+          word: typeof data.word === 'string' ? data.word : d.id,
+          article: rawArticle,
+          partOfSpeech: typeof data.partOfSpeech === 'string' ? data.partOfSpeech : 'German word',
+          cefr: typeof data.cefr === 'string' ? data.cefr : 'A1',
+          englishMeaning: typeof data.englishMeaning === 'string' ? data.englishMeaning : '',
+          hindiMeaning: typeof data.hindiMeaning === 'string' ? data.hindiMeaning : '',
+          devanagariFull: typeof data.devanagariFull === 'string' ? data.devanagariFull : '',
+          ipa: typeof data.ipa === 'string' ? data.ipa : '',
+          searchCount: clampNumber(typeof data.searchCount === 'number' ? data.searchCount : 1, 1, 10000),
+          createdAtMs: parseTimestampMs(data.createdAt),
+          lastSearchedAtMs: parseTimestampMs(data.lastSearchedAt),
+        };
+      });
+      onUpdate(records);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, wordsPath);
+      } catch (wrapped) {
+        onError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+      }
+    },
+  );
+}
+
+/**
+ * Removes a word from the user's synced searched-word history.
+ */
+export async function deleteSearchedWordFromCloud(uid: string, wordId: string): Promise<void> {
+  const safeId = /^[a-zA-Z0-9_-]{1,100}$/.test(wordId) ? wordId : toSafeWordDocId(wordId);
+  const wordPath = `users/${uid}/searchedWords/${safeId}`;
+  const wordRef = doc(db, 'users', uid, 'searchedWords', safeId);
+
+  try {
+    await deleteDoc(wordRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, wordPath);
+  }
+}
+

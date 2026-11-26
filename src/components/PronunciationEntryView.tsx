@@ -20,6 +20,8 @@ export type PlaybackSpeed = 'normal' | 'slow';
 interface PronunciationEntryViewProps {
   entry: DictionaryEntry;
   isSaved: boolean;
+  isAutoSavedHistory?: boolean;
+  isLoadingMeaning?: boolean;
   playbackSpeed: PlaybackSpeed;
   isEnhancingAi: boolean;
   onPlaybackSpeedChange: (speed: PlaybackSpeed) => void;
@@ -31,6 +33,8 @@ interface PronunciationEntryViewProps {
 export function PronunciationEntryView({
   entry,
   isSaved,
+  isAutoSavedHistory = false,
+  isLoadingMeaning = false,
   playbackSpeed,
   isEnhancingAi,
   onPlaybackSpeedChange,
@@ -122,6 +126,12 @@ export function PronunciationEntryView({
           <span>CEFR {entry.cefr}</span>
           <span aria-hidden="true">·</span>
           <span className="text-blue-700 font-medium">{sourceLabel}</span>
+          {isAutoSavedHistory && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="text-emerald-700 font-medium">Saved to Revision History</span>
+            </>
+          )}
           {entry.matchedQuery && (
             <>
               <span aria-hidden="true">·</span>
@@ -179,7 +189,7 @@ export function PronunciationEntryView({
               className={`w-3.5 h-3.5 ${isSaved ? 'fill-blue-700 text-blue-700' : ''}`}
               aria-hidden="true"
             />
-            <span>{isSaved ? 'Saved' : 'Save Word'}</span>
+            <span>{isSaved ? 'Bookmarked' : 'Bookmark'}</span>
           </button>
         </div>
       </div>
@@ -197,18 +207,31 @@ export function PronunciationEntryView({
             )}
             {entry.word}
           </h1>
-          <p className="mt-1.5 text-base text-slate-600 leading-relaxed">
-            <span>{entry.englishMeaning}</span>
-            {entry.hindiMeaning && (
-              <>
-                {' '}
-                <span className="mx-1.5 text-slate-300" aria-hidden="true">
-                  ·
-                </span>{' '}
-                <span className="font-devanagari text-slate-800">{entry.hindiMeaning}</span>
-              </>
-            )}
-          </p>
+
+          {/* Clear English & Hindi Meanings */}
+          <dl className="mt-2.5 flex flex-wrap items-baseline gap-x-5 gap-y-1.5 text-sm sm:text-[15px] leading-relaxed">
+            <div className="flex items-baseline gap-1.5">
+              <dt className="text-xs font-medium text-slate-500 shrink-0">English:</dt>
+              <dd className="text-slate-800 font-medium">{entry.englishMeaning}</dd>
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <dt className="text-xs font-medium text-slate-500 shrink-0">हिंदी:</dt>
+              <dd className="font-devanagari text-slate-900 font-medium">
+                {entry.hindiMeaning ? (
+                  entry.hindiMeaning
+                ) : isLoadingMeaning ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-slate-500 font-sans font-normal">
+                    <Loader2 className="w-3 h-3 animate-spin text-blue-700" aria-hidden="true" />
+                    <span>Fetching Hindi meaning…</span>
+                  </span>
+                ) : (
+                  <span className="text-xs text-slate-400 font-sans font-normal">
+                    Tap Enhance with AI for Hindi gloss
+                  </span>
+                )}
+              </dd>
+            </div>
+          </dl>
         </div>
 
         {/* Audio Playback & Speed Toggle */}

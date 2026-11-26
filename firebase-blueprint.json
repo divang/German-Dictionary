@@ -125,6 +125,90 @@
         "sectionScores",
         "createdAt"
       ]
+    },
+    "SearchedWord": {
+      "title": "SearchedWord",
+      "description": "Permanently stored searched German word with English and Hindi meanings and Devanagari pronunciation for cross-device revision.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the learner who searched this word.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "word": {
+          "type": "string",
+          "description": "Canonical German word or short phrase.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "article": {
+          "type": "string",
+          "description": "German gender article if noun (der, die, das, or empty).",
+          "enum": ["", "der", "die", "das"],
+          "maxLength": 10
+        },
+        "partOfSpeech": {
+          "type": "string",
+          "description": "Part of speech label.",
+          "maxLength": 60
+        },
+        "cefr": {
+          "type": "string",
+          "description": "CEFR level label.",
+          "maxLength": 10
+        },
+        "englishMeaning": {
+          "type": "string",
+          "description": "Concise English translation.",
+          "maxLength": 240
+        },
+        "hindiMeaning": {
+          "type": "string",
+          "description": "Natural Hindi meaning in Devanagari script.",
+          "maxLength": 240
+        },
+        "devanagariFull": {
+          "type": "string",
+          "description": "Devanagari pronunciation guide for the German word.",
+          "maxLength": 180
+        },
+        "ipa": {
+          "type": "string",
+          "description": "Standard German IPA transcription.",
+          "maxLength": 120
+        },
+        "searchCount": {
+          "type": "number",
+          "description": "How many times the learner has searched or revised this word (1-10000)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the word was first searched."
+        },
+        "lastSearchedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the most recent search or revision."
+        }
+      },
+      "required": [
+        "ownerId",
+        "word",
+        "article",
+        "partOfSpeech",
+        "cefr",
+        "englishMeaning",
+        "hindiMeaning",
+        "devanagariFull",
+        "ipa",
+        "searchCount",
+        "createdAt",
+        "lastSearchedAt"
+      ]
     }
   },
   "firestore": {
@@ -139,6 +223,12 @@
         "$ref": "#/entities/ExamAttempt"
       },
       "description": "Immutable completed A1 mock exam and practice attempts belonging to the parent user."
+    },
+    "/users/{userId}/searchedWords/{wordId}": {
+      "schema": {
+        "$ref": "#/entities/SearchedWord"
+      },
+      "description": "Permanent per-user dictionary search history with English & Hindi meanings synced across laptop and mobile."
     }
   }
 }
