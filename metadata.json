@@ -1,6 +1,6 @@
 {
   "name": "LautBhasha",
   "description": "German pronunciation dictionary crafted for Hindi native speakers, with Devanagari syllable breakdowns, mouth and tongue mechanics, IPA, and native audio.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -5,6 +5,7 @@ import type { User } from 'firebase/auth';
 import { A1CertificateView } from './components/A1CertificateView';
 import { Header, type AppView } from './components/Header';
 import { MinimalPairsView } from './components/MinimalPairsView';
+import { NearbyGermanView } from './components/NearbyGermanView';
 import {
   PronunciationEntryView,
   type PlaybackSpeed,
@@ -839,6 +840,7 @@ export default function App() {
 
   const mobileTabs: { id: AppView; label: string }[] = [
     { id: 'dictionary', label: 'Dictionary' },
+    { id: 'nearby', label: 'Nearby' },
     { id: 'sentences', label: 'Sentences' },
     { id: 'a1-certificate', label: 'A1 Certificate' },
     { id: 'sound-guide', label: 'Sound Guide' },
@@ -952,6 +954,15 @@ export default function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {activeView === 'nearby' && (
+          <NearbyGermanView
+            onLookupWordInDictionary={(word) => {
+              setQuery(word);
+              void handleDictionaryLookup(word);
+            }}
+          />
         )}
 
         {activeView === 'sentences' && (

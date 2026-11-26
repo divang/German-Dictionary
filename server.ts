@@ -272,7 +272,7 @@ async function generateTtsWithRetry(
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '6mb' }));
 
   // Pre-warm the 382k-word in-repo German dictionary asynchronously
   void germanLexicon.ensureLoaded();
@@ -587,6 +587,288 @@ async function startServer() {
     res.status(502).json({
       error: 'Could not translate your sentence right now. Please try again in a moment.',
     });
+  });
+
+  const NEARBY_WORD_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+      detectedAs: {
+        type: Type.STRING,
+        description: 'Short description of how the input was interpreted (e.g. "Phonetic English spelling", "Hindi Devanagari pronunciation", "Approximate German spelling").',
+      },
+      candidates: {
+        type: Type.ARRAY,
+        description: '3 to 5 most probable real German words ranked from highest to lowest likelihood.',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            germanWord: { type: Type.STRING, description: 'Exact canonical German word WITHOUT der/die/das article.' },
+            article: { type: Type.STRING, description: 'Noun gender article: der, die, das, or empty string if not a noun.' },
+            partOfSpeech: { type: Type.STRING, description: 'e.g. Masculine noun, Feminine noun, Neuter noun, Verb, Adjective' },
+            confidence: { type: Type.STRING, description: 'One of: high, medium, possible' },
+            devanagari: { type: Type.STRING, description: 'Accurate Devanagari pronunciation using nuqta dots (ज़, ख़, ग़, फ़).' },
+            ipa: { type: Type.STRING, description: 'Standard German IPA enclosed in slashes.' },
+            englishMeaning: { type: Type.STRING, description: 'Concise English meaning.' },
+            hindiMeaning: { type: Type.STRING, description: 'Natural everyday Hindi meaning in Devanagari.' },
+            matchReason: { type: Type.STRING, description: '1 concise sentence explaining why this German word sounds like or resembles the user input.' },
+            exampleGerman: { type: Type.STRING, description: 'Short natural A1/A2 German sentence using this word.' },
+            exampleEnglish: { type: Type.STRING, description: 'Natural English translation of exampleGerman.' },
+          },
+          required: [
+            'germanWord',
+            'article',
+            'partOfSpeech',
+            'confidence',
+            'devanagari',
+            'ipa',
+            'englishMeaning',
+            'hindiMeaning',
+            'matchReason',
+            'exampleGerman',
+            'exampleEnglish',
+          ],
+        },
+      },
+    },
+    required: ['detectedAs', 'candidates'],
+  };
+
+  const NEARBY_SENTENCE_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+      detectedAs: {
+        type: Type.STRING,
+        description: 'Short description of how the rough sentence input was interpreted.',
+      },
+      candidates: {
+        type: Type.ARRAY,
+        description: '2 to 3 most probable real everyday German sentences matching the user rough spelling or spoken sounds, ranked best first.',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            germanSentence: { type: Type.STRING, description: 'Natural, grammatically correct everyday German sentence.' },
+            confidence: { type: Type.STRING, description: 'One of: high, medium, possible' },
+            devanagariSentence: { type: Type.STRING, description: 'Full German pronunciation written in Hindi Devanagari with accurate nuqta dots.' },
+            englishMeaning: { type: Type.STRING, description: 'Clear English meaning of the German sentence.' },
+            hindiMeaning: { type: Type.STRING, description: 'Natural Hindi meaning in Devanagari.' },
+            matchReason: { type: Type.STRING, description: '1 concise sentence explaining how the rough input maps to the real German words.' },
+            words: {
+              type: Type.ARRAY,
+              description: 'Ordered word-by-word breakdown of every word in germanSentence (omitting standalone punctuation).',
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  german: { type: Type.STRING },
+                  baseForm: { type: Type.STRING },
+                  article: { type: Type.STRING },
+                  devanagari: { type: Type.STRING },
+                  english: { type: Type.STRING },
+                  hindi: { type: Type.STRING },
+                  role: { type: Type.STRING },
+                },
+                required: ['german', 'baseForm', 'article', 'devanagari', 'english', 'hindi', 'role'],
+              },
+            },
+          },
+          required: [
+            'germanSentence',
+            'confidence',
+            'devanagariSentence',
+            'englishMeaning',
+            'hindiMeaning',
+            'matchReason',
+            'words',
+          ],
+        },
+      },
+    },
+    required: ['detectedAs', 'candidates'],
+  };
+
+  const nearbyCache = new Map<string, Record<string, unknown>>();
+  const MAX_NEARBY_CACHE = 250;
+
+  app.post('/api/nearby-german', async (req, res) => {
+    const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
+    const mode = req.body?.mode === 'sentence' ? 'sentence' : 'word';
+    const maxLen = mode === 'word' ? 80 : 240;
+
+    if (!query || query.length < 2) {
+      res.status(400).json({ error: 'Please speak or type at least 2 characters.' });
+      return;
+    }
+    if (query.length > maxLen) {
+      res.status(400).json({ error: `Input must be under ${maxLen} characters.` });
+      return;
+    }
+
+    const cacheKey = `${mode}::${query.toLowerCase()}`;
+    const cached = nearbyCache.get(cacheKey);
+    if (cached) {
+      res.json({ result: cached, cached: true });
+      return;
+    }
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'Nearby German finder is unavailable right now because the Gemini API key is not configured.',
+      });
+      return;
+    }
+
+    // For word mode, check local 382k FreeDict corpus for close orthographic candidates as extra hints
+    let corpusHints = '';
+    if (mode === 'word') {
+      try {
+        await germanLexicon.ensureLoaded();
+        const suggestions = germanLexicon.suggest(query, 6);
+        if (suggestions.length > 0) {
+          corpusHints = `Close spelling hints from our local German dictionary (only use if phonetically plausible): ${suggestions
+            .map((s) => `${s.article ? `${s.article} ` : ''}${s.word} (${s.english})`)
+            .join('; ')}.`;
+        }
+      } catch {
+        // Ignore lexicon hint errors
+      }
+    }
+
+    const promptContent =
+      mode === 'word'
+        ? [
+            `A native Hindi speaker heard or tried to speak a German word and wrote/spoke this rough approximation: "${query}".`,
+            'The input may be:',
+            '- Phonetic English spelling (e.g. "ent shul di gung" -> Entschuldigung, "free zeur" -> Friseur, "kranken hows" -> Krankenhaus)',
+            '- Misspelled German without umlauts or with swapped letters (e.g. "broet shen" -> Brötchen, "tsahn artst" -> Zahnarzt)',
+            '- Hindi Devanagari phonetic transcription of a German sound (e.g. "आपो-टेके" -> Apotheke, "बानहोफ़" -> Bahnhof)',
+            corpusHints,
+            'ALWAYS return at least 3 (and up to 5) distinct real German words ranked from most likely to least likely: put the strongest phonetic match first, followed by 2 to 4 phonetically similar, compound-related, or commonly confused nearby German words so the learner can compare. Include exact German spelling (no der/die/das inside germanWord), gender article, Devanagari pronunciation, IPA, English meaning, Devanagari Hindi meaning, and a clear 1-sentence matchReason.',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : [
+            `A native Hindi speaker heard or tried to speak a German sentence and wrote/spoke this rough approximation: "${query}".`,
+            'The input may be rough phonetic English spelling (e.g. "ish moeshte ain kaffe bitte", "wo ist de bahn hof", "vee feel kostet das"), broken/misspelled German, or Hindi Devanagari phonetic script.',
+            'ALWAYS reconstruct 2 to 3 distinct, natural everyday German sentences that sound like or closely match this input (put the closest match first, followed by 1 to 2 close everyday variations or similar-sounding alternatives).',
+            'For each candidate provide: exact germanSentence, confidence (high/medium/possible), Devanagari pronunciation, English meaning, Devanagari Hindi meaning, concise matchReason, and an exact ordered word-by-word breakdown (words array).',
+          ].join('\n');
+
+    const schema = mode === 'word' ? NEARBY_WORD_SCHEMA : NEARBY_SENTENCE_SCHEMA;
+    const attempts: { model: string; useThinking: boolean; waitBeforeMs: number }[] = [
+      { model: 'gemini-3.1-flash-lite', useThinking: false, waitBeforeMs: 0 },
+      { model: 'gemini-4-hydrogen', useThinking: true, waitBeforeMs: 250 },
+    ];
+
+    let lastErr: unknown;
+    for (const attempt of attempts) {
+      if (attempt.waitBeforeMs > 0) await delay(attempt.waitBeforeMs);
+      try {
+        const config = attempt.useThinking
+          ? {
+              systemInstruction:
+                'You are an expert German phonetics & speech-decoding coach for native Hindi speakers. Decode approximate spoken or phonetically-spelled German words and sentences into the most probable real German spelling with crisp Devanagari pronunciation, English & Hindi meanings.',
+              responseMimeType: 'application/json',
+              responseSchema: schema,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            }
+          : {
+              systemInstruction:
+                'You are an expert German phonetics & speech-decoding coach for native Hindi speakers. Decode approximate spoken or phonetically-spelled German words and sentences into the most probable real German spelling with crisp Devanagari pronunciation, English & Hindi meanings.',
+              responseMimeType: 'application/json',
+              responseSchema: schema,
+            };
+
+        const response = await ai.models.generateContent({
+          model: attempt.model,
+          contents: promptContent,
+          config,
+        });
+
+        const rawText = (response.text ?? '').trim();
+        if (rawText) {
+          const parsed = JSON.parse(rawText) as Record<string, unknown>;
+          if (Array.isArray(parsed.candidates) && parsed.candidates.length > 0) {
+            if (nearbyCache.size >= MAX_NEARBY_CACHE) {
+              const oldest = nearbyCache.keys().next().value;
+              if (oldest) nearbyCache.delete(oldest);
+            }
+            nearbyCache.set(cacheKey, parsed);
+            res.json({ result: parsed, cached: false });
+            return;
+          }
+        }
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    console.error(
+      '[api/nearby-german] Error:',
+      lastErr instanceof Error ? lastErr.message : String(lastErr),
+    );
+    res.status(502).json({
+      error: 'Could not find probable German matches right now. Please try again in a moment.',
+    });
+  });
+
+  app.post('/api/transcribe-audio', async (req, res) => {
+    const audioBase64 = typeof req.body?.audioBase64 === 'string' ? req.body.audioBase64.trim() : '';
+    const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim().slice(0, 60) : 'audio/webm';
+    const mode = req.body?.mode === 'sentence' ? 'sentence' : 'word';
+
+    if (!audioBase64) {
+      res.status(400).json({ error: 'Missing recorded audio data.' });
+      return;
+    }
+    if (audioBase64.length > 5_500_000) {
+      res.status(400).json({ error: 'Audio clip is too long. Please record a short word or sentence.' });
+      return;
+    }
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'Audio transcription is unavailable right now because the Gemini API key is not configured.',
+      });
+      return;
+    }
+
+    try {
+      const promptText =
+        mode === 'word'
+          ? 'Transcribe the spoken German word (or rough German pronunciation spoken by a learner) accurately as plain text with no commentary.'
+          : 'Transcribe the spoken German sentence (or rough German phrase spoken by a learner) accurately as plain text with no commentary.';
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-transcribe',
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: mimeType || 'audio/webm',
+                data: audioBase64,
+              },
+            },
+            { text: promptText },
+          ],
+        },
+      });
+
+      const transcript = (response.text ?? '').trim().replace(/^["'“„]+|["'”]+$/g, '');
+      if (!transcript) {
+        res.status(422).json({ error: 'Could not hear clear speech. Please try speaking again.' });
+        return;
+      }
+      res.json({ transcript });
+    } catch (err) {
+      console.error(
+        '[api/transcribe-audio] Error:',
+        err instanceof Error ? err.message : String(err),
+      );
+      res.status(502).json({
+        error: 'Could not transcribe voice recording right now. You can type the rough spelling instead.',
+      });
+    }
   });
 
   app.post('/api/pronounce', async (req, res) => {
