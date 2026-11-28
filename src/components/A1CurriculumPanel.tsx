@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import type { A1Module } from '../types/a1';
 import { playGermanAudio } from '../utils/audioPlayer';
+import { SpeakCheckButton } from '../context/PronunciationCheckContext';
 
 interface A1CurriculumPanelProps {
   modules: A1Module[];
@@ -247,6 +248,12 @@ export function A1CurriculumPanel({
                       )}
                       <span>Slow</span>
                     </button>
+                    <SpeakCheckButton
+                      targetText={ex.german}
+                      devanagari={ex.devanagari}
+                      variant="compact"
+                      className="min-h-[34px]"
+                    />
                   </div>
                 </div>
               );
@@ -354,6 +361,12 @@ export function A1CurriculumPanel({
                         )}
                         <span>Slow</span>
                       </button>
+                      <SpeakCheckButton
+                        targetText={item.german}
+                        devanagari={item.devanagari}
+                        ipa={item.ipa}
+                        variant="compact"
+                      />
                     </div>
 
                     <button
@@ -426,6 +439,12 @@ export function A1CurriculumPanel({
                       )}
                       <span>Slow</span>
                     </button>
+                    <SpeakCheckButton
+                      targetText={line.german}
+                      devanagari={line.devanagari}
+                      variant="compact"
+                      className="min-h-[34px]"
+                    />
                   </div>
                 </div>
               );

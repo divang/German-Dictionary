@@ -23,6 +23,7 @@ import {
   upsertSentenceHistory,
   validateEnglishSentenceInput,
 } from '../utils/sentenceTranslator';
+import { SpeakCheckButton } from '../context/PronunciationCheckContext';
 
 interface SentenceTranslatorViewProps {
   history: SentenceTranslationResult[];
@@ -387,6 +388,12 @@ export function SentenceTranslatorView({
               )}
               <span>Listen Slowly (0.65×)</span>
             </button>
+
+            <SpeakCheckButton
+              targetText={activeResult.germanSentence}
+              devanagari={activeResult.devanagariSentence}
+              variant="primary"
+            />
           </div>
         </div>
 
@@ -515,6 +522,12 @@ export function SentenceTranslatorView({
                         )}
                         <span>Slow</span>
                       </button>
+
+                      <SpeakCheckButton
+                        targetText={speakWord}
+                        devanagari={item.devanagari}
+                        variant="compact"
+                      />
                     </div>
 
                     <button
@@ -617,6 +630,12 @@ export function SentenceTranslatorView({
                       )}
                       <span>Slow</span>
                     </button>
+
+                    <SpeakCheckButton
+                      targetText={item.germanSentence}
+                      devanagari={item.devanagariSentence}
+                      variant="compact"
+                    />
 
                     <button
                       type="button"

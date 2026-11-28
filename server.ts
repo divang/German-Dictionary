@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { germanLexicon } from './server/lexiconIndex';
 import { buildGermanTtsAttempts } from './server/ttsHelper';
+import {
+  normalizePronunciationFeedback,
+  sanitizeAudioMimeType,
+} from './src/utils/pronunciationCheck';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -272,7 +276,7 @@ async function generateTtsWithRetry(
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '6mb' }));
+  app.use(express.json({ limit: '8mb' }));
 
   // Pre-warm the 382k-word in-repo German dictionary asynchronously
   void germanLexicon.ensureLoaded();
@@ -869,6 +873,192 @@ async function startServer() {
         error: 'Could not transcribe voice recording right now. You can type the rough spelling instead.',
       });
     }
+  });
+
+  // =========================================================================
+  // PRONUNCIATION ACCURACY EVALUATION (POST /api/evaluate-pronunciation)
+  // =========================================================================
+  const PRONUNCIATION_EVAL_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+      accuracyScore: {
+        type: Type.INTEGER,
+        description:
+          'Honest German pronunciation accuracy score from 0 to 100 based strictly on the recorded audio. 0-35 if silent/unintelligible/wrong word, 36-49 if major errors make it hard to recognize, 50-69 if understandable with clear pronunciation mistakes, 70-84 if good with minor accent/vowel tweaks, 85-100 if clear accurate German.',
+      },
+      heardText: {
+        type: Type.STRING,
+        description:
+          'What the speaker actually sounded like in German/Latin script (or "No clear speech detected" if silent).',
+      },
+      heardDevanagari: {
+        type: Type.STRING,
+        description:
+          'Phonetic Devanagari transcription of how the speaker actually pronounced it (so a Hindi speaker can compare what they said vs. the target).',
+      },
+      summaryEnglish: {
+        type: Type.STRING,
+        description: '1 to 2 clear, encouraging English sentences summarizing pronunciation accuracy.',
+      },
+      summaryHindi: {
+        type: Type.STRING,
+        description: '1 to 2 natural Hindi sentences (in Devanagari) summarizing the pronunciation rating.',
+      },
+      strengths: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: '1 to 3 specific sounds, syllables, or stress patterns the learner pronounced well.',
+      },
+      corrections: {
+        type: Type.ARRAY,
+        description:
+          'Up to 4 specific sound-by-sound corrections for mistakes heard in the audio (empty array only if accuracyScore >= 94).',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            segment: {
+              type: Type.STRING,
+              description: 'The German letter, syllable, or word segment to improve (e.g. "eu / ö", "ch", "r", "ie", "stress").',
+            },
+            issue: {
+              type: Type.STRING,
+              description: 'What was heard in the user recording vs. standard German.',
+            },
+            howToFix: {
+              type: Type.STRING,
+              description: 'Concrete lip, tongue, or airflow instruction to fix the sound.',
+            },
+            hindiTip: {
+              type: Type.STRING,
+              description: 'Short practical tip in Hindi (Devanagari) using familiar Hindi sound anchors.',
+            },
+          },
+          required: ['segment', 'issue', 'howToFix', 'hindiTip'],
+        },
+      },
+      retryTip: {
+        type: Type.STRING,
+        description: 'One crisp focus cue for the learner to try on their very next recording.',
+      },
+    },
+    required: [
+      'accuracyScore',
+      'heardText',
+      'heardDevanagari',
+      'summaryEnglish',
+      'summaryHindi',
+      'strengths',
+      'corrections',
+      'retryTip',
+    ],
+  };
+
+  app.post('/api/evaluate-pronunciation', async (req, res) => {
+    const targetText =
+      typeof req.body?.targetText === 'string' ? req.body.targetText.trim().slice(0, 220) : '';
+    const audioBase64 =
+      typeof req.body?.audioBase64 === 'string' ? req.body.audioBase64.trim() : '';
+    const rawMime = typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim().slice(0, 80) : '';
+    const devanagariHint =
+      typeof req.body?.devanagariHint === 'string' ? req.body.devanagariHint.trim().slice(0, 220) : '';
+    const ipaHint =
+      typeof req.body?.ipaHint === 'string' ? req.body.ipaHint.trim().slice(0, 120) : '';
+
+    if (!targetText) {
+      res.status(400).json({ error: 'Missing target German word or sentence to check.' });
+      return;
+    }
+    if (!audioBase64) {
+      res.status(400).json({ error: 'Missing recorded voice clip. Please record your voice first.' });
+      return;
+    }
+    if (audioBase64.length > 5_500_000) {
+      res.status(400).json({
+        error: 'Recording is too large. Please keep your German pronunciation clip under 12 seconds.',
+      });
+      return;
+    }
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error:
+          'Voice pronunciation analysis is unavailable right now because the Gemini API key is not configured.',
+      });
+      return;
+    }
+
+    const mimeType = sanitizeAudioMimeType(rawMime);
+    const evalPrompt = [
+      'You are a strict yet encouraging Standard German (Hochdeutsch) phonetics coach evaluating a native Hindi speaker.',
+      `Target German to pronounce: "${targetText}"`,
+      devanagariHint ? `Reference Devanagari guide: ${devanagariHint}` : '',
+      ipaHint ? `Reference IPA: ${ipaHint}` : '',
+      '',
+      'Listen carefully to the attached audio recording and evaluate how accurately the speaker pronounced the exact German target above:',
+      '- Be completely honest: if the audio is silent, noise-only, English/Hindi instead of German, or a completely different word, score 0–35 and state clearly what happened.',
+      '- Check vowel quality (especially umlauts ä / ö / ü, ie vs ei, eu/äu, long vs short vowels), consonants (ich-Laut /ç/ vs ach-Laut /x/, initial s=/z/, z=/ts/, v=/f/, w=/v/, sch=/ʃ/, uvular or vocalized r), word stress, and sentence rhythm.',
+      '- Give actionable mouth/tongue fixes tailored for Hindi speakers (e.g., rounding lips like ओ while saying ए for ö, or rounding lips like ऊ while saying ई for ü).',
+      '- Return ONLY valid JSON matching the schema.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const attempts: { model: string; thinkingLevel?: ThinkingLevel }[] = [
+      { model: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.LOW },
+      { model: 'gemini-3.1-flash-lite' },
+    ];
+
+    let lastErr: unknown = null;
+    for (const attempt of attempts) {
+      try {
+        const config: Record<string, unknown> = {
+          responseMimeType: 'application/json',
+          responseSchema: PRONUNCIATION_EVAL_SCHEMA,
+        };
+        if (attempt.thinkingLevel) {
+          config.thinkingConfig = { thinkingLevel: attempt.thinkingLevel };
+        }
+
+        const response = await ai.models.generateContent({
+          model: attempt.model,
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType,
+                  data: audioBase64,
+                },
+              },
+              { text: evalPrompt },
+            ],
+          },
+          config,
+        });
+
+        const rawText = (response.text ?? '').trim();
+        if (rawText) {
+          const parsed = JSON.parse(rawText) as Record<string, unknown>;
+          const feedback = normalizePronunciationFeedback(parsed, targetText);
+          res.json({ feedback });
+          return;
+        }
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('API_KEY_INVALID') || msg.includes('PERMISSION_DENIED')) {
+          break;
+        }
+      }
+    }
+
+    console.error(
+      '[api/evaluate-pronunciation] Error:',
+      lastErr instanceof Error ? lastErr.message : String(lastErr),
+    );
+    res.status(502).json({
+      error: 'Could not analyze your voice recording right now. Please try recording again.',
+    });
   });
 
   // =========================================================================

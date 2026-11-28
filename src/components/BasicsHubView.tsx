@@ -30,6 +30,7 @@ import type {
 } from '../types/basics';
 import { playGermanAudio } from '../utils/audioPlayer';
 import { describeGermanNumber } from '../utils/germanNumbers';
+import { SpeakCheckButton } from '../context/PronunciationCheckContext';
 
 interface BasicsHubViewProps {
   onLookupWordInDictionary: (word: string) => void;
@@ -409,6 +410,13 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                   <Clock className="w-4 h-4" aria-hidden="true" />
                   <span>Slow</span>
                 </button>
+                <SpeakCheckButton
+                  targetText={currentLetterEntry.spokenLetterPrompt}
+                  displayLabel={`Letter ${currentLetterEntry.letter} (${currentLetterEntry.nameGerman})`}
+                  devanagari={currentLetterEntry.devanagariName}
+                  ipa={currentLetterEntry.ipa}
+                  variant="primary"
+                />
               </div>
             </div>
           </div>
@@ -487,6 +495,12 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                           >
                             Slow
                           </button>
+                          <SpeakCheckButton
+                            targetText={item.word}
+                            devanagari={item.devanagari}
+                            variant="compact"
+                            className="min-h-[36px]"
+                          />
                         </div>
                       </div>
 
@@ -496,18 +510,21 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                           <p className="text-sm font-medium text-slate-900 leading-snug">
                             {item.sentenceGerman}
                           </p>
-                          <button
-                            type="button"
-                            onClick={() => void handleSpeak(sentKey, item.sentenceGerman, false)}
-                            aria-label={`Listen to example sentence for ${item.word}`}
-                            className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
-                          >
-                            {playingId === sentKey ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                            ) : (
-                              <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                            )}
-                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => void handleSpeak(sentKey, item.sentenceGerman, false)}
+                              aria-label={`Listen to example sentence for ${item.word}`}
+                              className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
+                            >
+                              {playingId === sentKey ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                              ) : (
+                                <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                              )}
+                            </button>
+                            <SpeakCheckButton targetText={item.sentenceGerman} variant="icon" />
+                          </div>
                         </div>
                         <p className="text-xs text-slate-600">{item.sentenceEnglish}</p>
                       </div>
@@ -644,45 +661,54 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                     </div>
 
                     {/* Clickable Example Words */}
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {rule.examples.map((ex) => {
                         const exKey = `rule-ex-${rule.id}-${ex.word}`;
                         return (
-                          <button
+                          <div
                             key={ex.word}
-                            type="button"
-                            onClick={() => void handleSpeak(exKey, ex.word, false)}
-                            aria-label={`Listen to example word ${ex.word}`}
-                            className="flex items-center justify-between gap-2 text-left px-3 py-2 rounded-lg bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 transition-colors cursor-pointer"
+                            className="flex items-center justify-between gap-1.5 px-2.5 py-2 rounded-lg bg-slate-50 border border-slate-200"
                           >
-                            <div className="min-w-0">
-                              <div className="flex items-baseline gap-1.5">
-                                {ex.article && (
-                                  <span className="text-[11px] text-slate-400">{ex.article}</span>
-                                )}
-                                <span className="text-sm font-semibold text-slate-900 truncate">
-                                  {ex.word}
-                                </span>
+                            <button
+                              type="button"
+                              onClick={() => void handleSpeak(exKey, ex.word, false)}
+                              aria-label={`Listen to example word ${ex.word}`}
+                              className="flex-1 min-w-0 flex items-center justify-between gap-2 text-left rounded-md px-1 py-0.5 hover:bg-blue-50 transition-colors cursor-pointer"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-baseline gap-1.5">
+                                  {ex.article && (
+                                    <span className="text-[11px] text-slate-400">{ex.article}</span>
+                                  )}
+                                  <span className="text-sm font-semibold text-slate-900 truncate">
+                                    {ex.word}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-slate-600 truncate">
+                                  <span className="font-devanagari text-blue-700">
+                                    {ex.devanagari}
+                                  </span>{' '}
+                                  · {ex.english}
+                                </div>
                               </div>
-                              <div className="text-xs text-slate-600 truncate">
-                                <span className="font-devanagari text-blue-700">
-                                  {ex.devanagari}
-                                </span>{' '}
-                                · {ex.english}
-                              </div>
-                            </div>
-                            {playingId === exKey ? (
-                              <Loader2
-                                className="w-3.5 h-3.5 animate-spin text-blue-700 shrink-0"
-                                aria-hidden="true"
-                              />
-                            ) : (
-                              <Volume2
-                                className="w-3.5 h-3.5 text-blue-700 shrink-0"
-                                aria-hidden="true"
-                              />
-                            )}
-                          </button>
+                              {playingId === exKey ? (
+                                <Loader2
+                                  className="w-3.5 h-3.5 animate-spin text-blue-700 shrink-0"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <Volume2
+                                  className="w-3.5 h-3.5 text-blue-700 shrink-0"
+                                  aria-hidden="true"
+                                />
+                              )}
+                            </button>
+                            <SpeakCheckButton
+                              targetText={ex.word}
+                              devanagari={ex.devanagari}
+                              variant="icon"
+                            />
+                          </div>
                         );
                       })}
                     </div>
@@ -713,6 +739,7 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                         >
                           Slow
                         </button>
+                        <SpeakCheckButton targetText={rule.sentenceGerman} variant="icon" />
                       </div>
                     </div>
                     <p className="text-xs text-slate-600">{rule.sentenceEnglish}</p>
@@ -838,6 +865,12 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                     >
                       Slow
                     </button>
+                    <SpeakCheckButton
+                      targetText={parsedNumber.data.german}
+                      displayLabel={`${parsedNumber.data.value.toLocaleString()} (${parsedNumber.data.german})`}
+                      devanagari={parsedNumber.data.devanagari}
+                      variant="primary"
+                    />
                   </div>
                 </div>
 
@@ -855,20 +888,26 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                       {parsedNumber.data.sentenceEnglish}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void handleSpeak('gen-num-sent', parsedNumber.data!.sentenceGerman, false)
-                    }
-                    aria-label="Listen to generated number example sentence"
-                    className="p-2 min-w-[36px] min-h-[36px] inline-flex items-center justify-center rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 shrink-0 cursor-pointer"
-                  >
-                    {playingId === 'gen-num-sent' ? (
-                      <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Volume2 className="w-4 h-4" aria-hidden="true" />
-                    )}
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void handleSpeak('gen-num-sent', parsedNumber.data!.sentenceGerman, false)
+                      }
+                      aria-label="Listen to generated number example sentence"
+                      className="p-2 min-w-[36px] min-h-[36px] inline-flex items-center justify-center rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 shrink-0 cursor-pointer"
+                    >
+                      {playingId === 'gen-num-sent' ? (
+                        <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Volume2 className="w-4 h-4" aria-hidden="true" />
+                      )}
+                    </button>
+                    <SpeakCheckButton
+                      targetText={parsedNumber.data.sentenceGerman}
+                      variant="icon"
+                    />
+                  </div>
                 </div>
               </div>
             )}
@@ -953,6 +992,12 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                         >
                           Slow
                         </button>
+                        <SpeakCheckButton
+                          targetText={num.german}
+                          devanagari={num.devanagari}
+                          variant="compact"
+                          className="min-h-[36px]"
+                        />
                       </div>
                     </div>
 
@@ -967,18 +1012,21 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                         <p className="text-sm font-medium text-slate-900">{num.sentenceGerman}</p>
                         <p className="text-xs text-slate-600 mt-0.5">{num.sentenceEnglish}</p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleSpeak(sKey, num.sentenceGerman, false)}
-                        aria-label={`Listen to example sentence for ${num.german}`}
-                        className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
-                      >
-                        {playingId === sKey ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        )}
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void handleSpeak(sKey, num.sentenceGerman, false)}
+                          aria-label={`Listen to example sentence for ${num.german}`}
+                          className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
+                        >
+                          {playingId === sKey ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          )}
+                        </button>
+                        <SpeakCheckButton targetText={num.sentenceGerman} variant="icon" />
+                      </div>
                     </div>
                   </article>
                 );
@@ -1060,6 +1108,12 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                         >
                           Slow
                         </button>
+                        <SpeakCheckButton
+                          targetText={day.german}
+                          devanagari={day.devanagari}
+                          variant="compact"
+                          className="min-h-[36px]"
+                        />
                       </div>
                     </div>
 
@@ -1068,18 +1122,21 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                         <p className="text-sm font-medium text-slate-900">{day.sentenceGerman}</p>
                         <p className="text-xs text-slate-600 mt-0.5">{day.sentenceEnglish}</p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleSpeak(sKey, day.sentenceGerman, false)}
-                        aria-label={`Listen to example sentence for ${day.german}`}
-                        className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
-                      >
-                        {playingId === sKey ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        )}
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void handleSpeak(sKey, day.sentenceGerman, false)}
+                          aria-label={`Listen to example sentence for ${day.german}`}
+                          className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
+                        >
+                          {playingId === sKey ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          )}
+                        </button>
+                        <SpeakCheckButton targetText={day.sentenceGerman} variant="icon" />
+                      </div>
                     </div>
                   </article>
                 );
@@ -1118,37 +1175,48 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                           <span className="font-devanagari text-slate-600">· {tw.hindi}</span>
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleSpeak(wKey, tw.german, false)}
-                        aria-label={`Listen to ${tw.german}`}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[36px] text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-lg cursor-pointer shrink-0"
-                      >
-                        {playingId === wKey ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        )}
-                        <span>Listen</span>
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void handleSpeak(wKey, tw.german, false)}
+                          aria-label={`Listen to ${tw.german}`}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[36px] text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-lg cursor-pointer shrink-0"
+                        >
+                          {playingId === wKey ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          )}
+                          <span>Listen</span>
+                        </button>
+                        <SpeakCheckButton
+                          targetText={tw.german}
+                          devanagari={tw.devanagari}
+                          variant="compact"
+                          className="min-h-[36px]"
+                        />
+                      </div>
                     </div>
                     <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3 flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-medium text-slate-900">{tw.sentenceGerman}</p>
                         <p className="text-xs text-slate-600 mt-0.5">{tw.sentenceEnglish}</p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleSpeak(sKey, tw.sentenceGerman, false)}
-                        aria-label={`Listen to example sentence for ${tw.german}`}
-                        className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
-                      >
-                        {playingId === sKey ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        )}
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void handleSpeak(sKey, tw.sentenceGerman, false)}
+                          aria-label={`Listen to example sentence for ${tw.german}`}
+                          className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
+                        >
+                          {playingId === sKey ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          )}
+                        </button>
+                        <SpeakCheckButton targetText={tw.sentenceGerman} variant="icon" />
+                      </div>
                     </div>
                   </article>
                 );
@@ -1204,19 +1272,26 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                           {m.english} · <span className="font-devanagari">{m.hindi}</span>
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleSpeak(wKey, m.german, false)}
-                        aria-label={`Listen to month ${m.german}`}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[36px] text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-lg cursor-pointer shrink-0"
-                      >
-                        {playingId === wKey ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        )}
-                        <span>Listen</span>
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void handleSpeak(wKey, m.german, false)}
+                          aria-label={`Listen to month ${m.german}`}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[36px] text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-lg cursor-pointer shrink-0"
+                        >
+                          {playingId === wKey ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          )}
+                          <span>Listen</span>
+                        </button>
+                        <SpeakCheckButton
+                          targetText={m.german}
+                          devanagari={m.devanagari}
+                          variant="icon"
+                        />
+                      </div>
                     </div>
 
                     <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3 flex items-start justify-between gap-2">
@@ -1226,18 +1301,21 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                         </p>
                         <p className="text-xs text-slate-600 mt-0.5">{m.sentenceEnglish}</p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleSpeak(sKey, m.sentenceGerman, false)}
-                        aria-label={`Listen to example sentence for ${m.german}`}
-                        className="p-1.5 min-w-[30px] min-h-[30px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
-                      >
-                        {playingId === sKey ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        )}
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void handleSpeak(sKey, m.sentenceGerman, false)}
+                          aria-label={`Listen to example sentence for ${m.german}`}
+                          className="p-1.5 min-w-[30px] min-h-[30px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
+                        >
+                          {playingId === sKey ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          )}
+                        </button>
+                        <SpeakCheckButton targetText={m.sentenceGerman} variant="icon" />
+                      </div>
                     </div>
                   </article>
                 );
@@ -1275,37 +1353,48 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                           <span className="font-devanagari text-slate-600">· {s.hindi}</span>
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleSpeak(wKey, s.german, false)}
-                        aria-label={`Listen to season ${s.german}`}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[36px] text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-lg cursor-pointer shrink-0"
-                      >
-                        {playingId === wKey ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        )}
-                        <span>Listen</span>
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void handleSpeak(wKey, s.german, false)}
+                          aria-label={`Listen to season ${s.german}`}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[36px] text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-lg cursor-pointer shrink-0"
+                        >
+                          {playingId === wKey ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          )}
+                          <span>Listen</span>
+                        </button>
+                        <SpeakCheckButton
+                          targetText={s.german}
+                          devanagari={s.devanagari}
+                          variant="compact"
+                          className="min-h-[36px]"
+                        />
+                      </div>
                     </div>
                     <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3 flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-medium text-slate-900">{s.sentenceGerman}</p>
                         <p className="text-xs text-slate-600 mt-0.5">{s.sentenceEnglish}</p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleSpeak(sKey, s.sentenceGerman, false)}
-                        aria-label={`Listen to example sentence for ${s.german}`}
-                        className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
-                      >
-                        {playingId === sKey ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        )}
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void handleSpeak(sKey, s.sentenceGerman, false)}
+                          aria-label={`Listen to example sentence for ${s.german}`}
+                          className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
+                        >
+                          {playingId === sKey ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          )}
+                        </button>
+                        <SpeakCheckButton targetText={s.sentenceGerman} variant="icon" />
+                      </div>
                     </div>
                   </article>
                 );
@@ -1396,24 +1485,33 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                       >
                         Slow
                       </button>
+                      <SpeakCheckButton
+                        targetText={p.german}
+                        devanagari={p.devanagari}
+                        variant="compact"
+                        className="min-h-[36px]"
+                      />
                     </div>
                   </div>
 
                   <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3 space-y-1">
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-sm font-medium text-slate-900">{p.sentenceGerman}</p>
-                      <button
-                        type="button"
-                        onClick={() => void handleSpeak(sKey, p.sentenceGerman, false)}
-                        aria-label={`Listen to example sentence for ${p.german}`}
-                        className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
-                      >
-                        {playingId === sKey ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        )}
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void handleSpeak(sKey, p.sentenceGerman, false)}
+                          aria-label={`Listen to example sentence for ${p.german}`}
+                          className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
+                        >
+                          {playingId === sKey ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          )}
+                        </button>
+                        <SpeakCheckButton targetText={p.sentenceGerman} variant="icon" />
+                      </div>
                     </div>
                     <p className="text-xs text-slate-600">{p.sentenceEnglish}</p>
                     <p className="text-xs font-devanagari text-slate-500">{p.sentenceHindi}</p>
@@ -1531,18 +1629,25 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                               {ex.english} · <span className="font-devanagari">{ex.hindi}</span>
                             </p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => void handleSpeak(wKey, ex.german, false)}
-                            aria-label={`Listen to ${ex.german}`}
-                            className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
-                          >
-                            {playingId === wKey ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                            ) : (
-                              <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                            )}
-                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => void handleSpeak(wKey, ex.german, false)}
+                              aria-label={`Listen to ${ex.german}`}
+                              className="p-1.5 min-w-[32px] min-h-[32px] inline-flex items-center justify-center rounded-md bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
+                            >
+                              {playingId === wKey ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                              ) : (
+                                <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                              )}
+                            </button>
+                            <SpeakCheckButton
+                              targetText={ex.german}
+                              devanagari={ex.devanagari}
+                              variant="icon"
+                            />
+                          </div>
                         </div>
 
                         <div className="bg-white border border-slate-200 rounded-md p-2.5 flex items-start justify-between gap-2">
@@ -1554,18 +1659,21 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                               {ex.sentenceEnglish}
                             </p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => void handleSpeak(sKey, ex.sentenceGerman, false)}
-                            aria-label={`Listen to example sentence for ${ex.german}`}
-                            className="p-1 min-w-[28px] min-h-[28px] inline-flex items-center justify-center rounded bg-slate-50 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
-                          >
-                            {playingId === sKey ? (
-                              <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
-                            ) : (
-                              <Volume2 className="w-3 h-3" aria-hidden="true" />
-                            )}
-                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => void handleSpeak(sKey, ex.sentenceGerman, false)}
+                              aria-label={`Listen to example sentence for ${ex.german}`}
+                              className="p-1 min-w-[28px] min-h-[28px] inline-flex items-center justify-center rounded bg-slate-50 text-blue-700 hover:bg-blue-50 shrink-0 cursor-pointer"
+                            >
+                              {playingId === sKey ? (
+                                <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+                              ) : (
+                                <Volume2 className="w-3 h-3" aria-hidden="true" />
+                              )}
+                            </button>
+                            <SpeakCheckButton targetText={ex.sentenceGerman} variant="icon" />
+                          </div>
                         </div>
                       </div>
                     );
@@ -1648,6 +1756,12 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                       >
                         Slow
                       </button>
+                      <SpeakCheckButton
+                        targetText={q.german}
+                        devanagari={q.devanagari}
+                        variant="compact"
+                        className="min-h-[36px]"
+                      />
                     </div>
                   </div>
 
@@ -1675,6 +1789,7 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                         >
                           Slow
                         </button>
+                        <SpeakCheckButton targetText={q.sentenceGerman} variant="icon" />
                       </div>
                     </div>
                     <p className="text-xs text-slate-600">{q.sentenceEnglish}</p>

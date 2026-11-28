@@ -32,6 +32,7 @@ import {
   validateNearbyInput,
 } from '../utils/nearbyGerman';
 import { stripArticleAndPunctuation } from '../utils/sentenceTranslator';
+import { SpeakCheckButton } from '../context/PronunciationCheckContext';
 
 interface NearbyGermanViewProps {
   onLookupWordInDictionary: (word: string) => void;
@@ -780,6 +781,14 @@ export function NearbyGermanView({ onLookupWordInDictionary }: NearbyGermanViewP
                         )}
                         <span>Slow</span>
                       </button>
+
+                      <SpeakCheckButton
+                        targetText={cand.germanWord}
+                        devanagari={cand.devanagari}
+                        ipa={cand.ipa}
+                        variant="compact"
+                        className="min-h-[34px]"
+                      />
                     </div>
 
                     <button
@@ -932,6 +941,12 @@ export function NearbyGermanView({ onLookupWordInDictionary }: NearbyGermanViewP
                   )}
                   <span>Listen Slowly (0.65×)</span>
                 </button>
+
+                <SpeakCheckButton
+                  targetText={activeSentenceCandidate.germanSentence}
+                  devanagari={activeSentenceCandidate.devanagariSentence}
+                  variant="primary"
+                />
               </div>
             </div>
 
@@ -1063,6 +1078,11 @@ export function NearbyGermanView({ onLookupWordInDictionary }: NearbyGermanViewP
                               )}
                               <span>Slow</span>
                             </button>
+                            <SpeakCheckButton
+                              targetText={speakWord}
+                              devanagari={item.devanagari}
+                              variant="compact"
+                            />
                           </div>
 
                           <button

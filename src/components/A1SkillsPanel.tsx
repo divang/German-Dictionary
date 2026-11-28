@@ -17,6 +17,7 @@ import type {
 } from '../types/a1';
 import { buildSelfIntroScript } from '../utils/a1Progress';
 import { playGermanAudio } from '../utils/audioPlayer';
+import { SpeakCheckButton } from '../context/PronunciationCheckContext';
 
 interface A1SkillsPanelProps {
   activeSkill: 'hoeren' | 'lesen' | 'schreiben' | 'sprechen';
@@ -227,6 +228,14 @@ export function A1SkillsPanel({
                         )}
                         <span>Slow Speed</span>
                       </button>
+
+                      <SpeakCheckButton
+                        targetText={task.audioScript}
+                        displayLabel={task.title}
+                        devanagari={task.devanagariScript}
+                        variant="compact"
+                        className="min-h-[38px]"
+                      />
 
                       <button
                         type="button"
@@ -703,17 +712,25 @@ export function A1SkillsPanel({
                     <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                       Model A1 Answer
                     </p>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void handlePlay(`model-${activePrompt.id}`, activePrompt.modelAnswer, true)
-                      }
-                      disabled={playingKey !== null}
-                      className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-800 cursor-pointer"
-                    >
-                      <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>Listen (Slow)</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handlePlay(`model-${activePrompt.id}`, activePrompt.modelAnswer, true)
+                        }
+                        disabled={playingKey !== null}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-800 cursor-pointer"
+                      >
+                        <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Listen (Slow)</span>
+                      </button>
+                      <SpeakCheckButton
+                        targetText={activePrompt.modelAnswer}
+                        displayLabel={activePrompt.title}
+                        devanagari={activePrompt.modelDevanagari}
+                        variant="compact"
+                      />
+                    </div>
                   </div>
                   <p className="text-sm text-slate-900 whitespace-pre-line leading-relaxed">
                     {activePrompt.modelAnswer}
@@ -768,6 +785,12 @@ export function A1SkillsPanel({
                 >
                   <span>Slow</span>
                 </button>
+                <SpeakCheckButton
+                  targetText={fullIntroGerman}
+                  displayLabel="Full Self-Introduction"
+                  variant="compact"
+                  className="min-h-[38px]"
+                />
               </div>
             </div>
 
@@ -832,6 +855,11 @@ export function A1SkillsPanel({
                         >
                           Slow
                         </button>
+                        <SpeakCheckButton
+                          targetText={line.german}
+                          devanagari={line.devanagari}
+                          variant="compact"
+                        />
                       </div>
                     </div>
                   );
@@ -880,15 +908,22 @@ export function A1SkillsPanel({
                           <span className="font-semibold text-slate-500 uppercase tracking-wider text-[11px]">
                             Question / Request
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => void handlePlay(qKey, card.sampleQuestion, false)}
-                            disabled={playingKey !== null}
-                            className="inline-flex items-center gap-1 text-blue-700 hover:text-blue-800 font-medium cursor-pointer"
-                          >
-                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                            <span>Listen</span>
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void handlePlay(qKey, card.sampleQuestion, false)}
+                              disabled={playingKey !== null}
+                              className="inline-flex items-center gap-1 text-blue-700 hover:text-blue-800 font-medium cursor-pointer"
+                            >
+                              <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>Listen</span>
+                            </button>
+                            <SpeakCheckButton
+                              targetText={card.sampleQuestion}
+                              devanagari={card.sampleQuestionDevanagari}
+                              variant="compact"
+                            />
+                          </div>
                         </div>
                         <p className="text-sm font-medium text-slate-900">{card.sampleQuestion}</p>
                         <p className="font-devanagari text-blue-800">
@@ -901,15 +936,22 @@ export function A1SkillsPanel({
                           <span className="font-semibold text-slate-500 uppercase tracking-wider text-[11px]">
                             Partner Reply
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => void handlePlay(aKey, card.sampleAnswer, false)}
-                            disabled={playingKey !== null}
-                            className="inline-flex items-center gap-1 text-blue-700 hover:text-blue-800 font-medium cursor-pointer"
-                          >
-                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                            <span>Listen</span>
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void handlePlay(aKey, card.sampleAnswer, false)}
+                              disabled={playingKey !== null}
+                              className="inline-flex items-center gap-1 text-blue-700 hover:text-blue-800 font-medium cursor-pointer"
+                            >
+                              <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>Listen</span>
+                            </button>
+                            <SpeakCheckButton
+                              targetText={card.sampleAnswer}
+                              devanagari={card.sampleAnswerDevanagari}
+                              variant="compact"
+                            />
+                          </div>
                         </div>
                         <p className="text-sm font-medium text-slate-900">{card.sampleAnswer}</p>
                         <p className="font-devanagari text-blue-800">

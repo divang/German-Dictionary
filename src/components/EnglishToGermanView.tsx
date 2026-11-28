@@ -18,6 +18,7 @@ import {
   normalizeEnglishToGermanResult,
   validateEnglishWordInput,
 } from '../utils/englishToGerman';
+import { SpeakCheckButton } from '../context/PronunciationCheckContext';
 
 interface EnglishToGermanViewProps {
   onLookupWordInDictionary: (word: string) => void;
@@ -492,19 +493,22 @@ export function EnglishToGermanView({ onLookupWordInDictionary }: EnglishToGerma
                         <p className="font-medium text-slate-800 leading-snug">
                           {item.exampleGerman}
                         </p>
-                        <button
-                          type="button"
-                          disabled={playingKey !== null}
-                          onClick={() => handlePlayGerman(item.exampleGerman, exKey, false)}
-                          aria-label={`Listen to example sentence for ${item.germanWord}`}
-                          className="p-1 text-slate-500 hover:text-blue-700 rounded cursor-pointer disabled:opacity-50 shrink-0"
-                        >
-                          {playingKey === exKey ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                          ) : (
-                            <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                          )}
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            disabled={playingKey !== null}
+                            onClick={() => handlePlayGerman(item.exampleGerman, exKey, false)}
+                            aria-label={`Listen to example sentence for ${item.germanWord}`}
+                            className="p-1 text-slate-500 hover:text-blue-700 rounded cursor-pointer disabled:opacity-50 shrink-0"
+                          >
+                            {playingKey === exKey ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                            ) : (
+                              <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            )}
+                          </button>
+                          <SpeakCheckButton targetText={item.exampleGerman} variant="icon" />
+                        </div>
                       </div>
                       {item.exampleEnglish && (
                         <p className="text-slate-500">{item.exampleEnglish}</p>
@@ -549,6 +553,14 @@ export function EnglishToGermanView({ onLookupWordInDictionary }: EnglishToGerma
                       )}
                       <span>Slow</span>
                     </button>
+
+                    <SpeakCheckButton
+                      targetText={item.germanWord}
+                      devanagari={item.devanagari}
+                      ipa={item.ipa}
+                      variant="compact"
+                      className="min-h-[34px]"
+                    />
                   </div>
 
                   <button

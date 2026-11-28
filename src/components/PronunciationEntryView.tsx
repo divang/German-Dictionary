@@ -16,6 +16,7 @@ import { getDifficultyMeta } from '../utils/dictionary';
 import { playGermanAudio } from '../utils/audioPlayer';
 import { resolveSyllableAudioTarget } from '../utils/voiceSelection';
 import { normalizeWordFormation } from '../utils/wordFormation';
+import { SpeakCheckButton } from '../context/PronunciationCheckContext';
 import { ArticulationDiagram } from './ArticulationDiagram';
 
 const clientWordFormationCache = new Map<string, WordFormation>();
@@ -352,6 +353,13 @@ export function PronunciationEntryView({
             )}
             <span>{playbackSpeed === 'slow' ? 'Listen Slowly' : 'Listen'}</span>
           </button>
+
+          <SpeakCheckButton
+            targetText={entry.word}
+            devanagari={entry.devanagariFull}
+            ipa={entry.ipa}
+            variant="primary"
+          />
         </div>
       </div>
 
@@ -500,7 +508,7 @@ export function PronunciationEntryView({
                           </div>
 
                           {part.speakable && (
-                            <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5">
+                            <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-1.5">
                               <button
                                 type="button"
                                 disabled={playingKey !== null}
@@ -533,6 +541,11 @@ export function PronunciationEntryView({
                                 )}
                                 <span>Slow</span>
                               </button>
+                              <SpeakCheckButton
+                                targetText={part.german}
+                                devanagari={part.devanagari}
+                                variant="compact"
+                              />
                             </div>
                           )}
                         </div>
@@ -614,6 +627,12 @@ export function PronunciationEntryView({
                       )}
                       <span>Slow</span>
                     </button>
+
+                    <SpeakCheckButton
+                      targetText={ex.german}
+                      devanagari={ex.devanagari}
+                      variant="compact"
+                    />
                   </div>
                 </div>
 
@@ -667,26 +686,33 @@ export function PronunciationEntryView({
                       <span className="text-slate-600">{col.english}</span>
                     </div>
 
-                    <button
-                      type="button"
-                      disabled={playingKey !== null}
-                      onClick={() =>
-                        handlePlay(
-                          col.german,
-                          colKey,
-                          playbackSpeed === 'slow',
-                        )
-                      }
-                      aria-label={`Listen to phrase ${col.german}`}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 min-h-[30px] text-xs font-medium text-slate-600 hover:text-blue-700 bg-white border border-slate-200 rounded-md transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-blue-700"
-                    >
-                      {playingKey === colKey ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                      ) : (
-                        <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                      )}
-                      <span>{playbackSpeed === 'slow' ? 'Slow' : 'Listen'}</span>
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        disabled={playingKey !== null}
+                        onClick={() =>
+                          handlePlay(
+                            col.german,
+                            colKey,
+                            playbackSpeed === 'slow',
+                          )
+                        }
+                        aria-label={`Listen to phrase ${col.german}`}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 min-h-[30px] text-xs font-medium text-slate-600 hover:text-blue-700 bg-white border border-slate-200 rounded-md transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-blue-700"
+                      >
+                        {playingKey === colKey ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        )}
+                        <span>{playbackSpeed === 'slow' ? 'Slow' : 'Listen'}</span>
+                      </button>
+                      <SpeakCheckButton
+                        targetText={col.german}
+                        devanagari={col.devanagari}
+                        variant="compact"
+                      />
+                    </div>
                   </li>
                 );
               })}
@@ -793,34 +819,50 @@ export function PronunciationEntryView({
                     </span>
                   </div>
 
-                  <button
-                    type="button"
-                    disabled={playingKey !== null}
-                    onClick={() => {
-                      setSelectedSyllableIdx(index);
-                      const target = resolveSyllableAudioTarget({
-                        segment: syl.segment,
-                        word: entry.word,
-                        ipa: syl.ipa,
-                        wordIpa: entry.ipa,
-                      });
-                      handlePlay(
-                        target.text,
-                        chunkKey,
-                        target.forceSlow || playbackSpeed === 'slow',
-                        target.ipa,
-                      );
-                    }}
-                    aria-label={`Hear sound ${syl.segment}`}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 min-h-[32px] text-xs font-medium text-slate-600 hover:text-blue-700 bg-white border border-slate-200 hover:border-blue-300 rounded-md transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-blue-700"
-                  >
-                    {playingKey === chunkKey ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    )}
-                    <span>Hear</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      disabled={playingKey !== null}
+                      onClick={() => {
+                        setSelectedSyllableIdx(index);
+                        const target = resolveSyllableAudioTarget({
+                          segment: syl.segment,
+                          word: entry.word,
+                          ipa: syl.ipa,
+                          wordIpa: entry.ipa,
+                        });
+                        handlePlay(
+                          target.text,
+                          chunkKey,
+                          target.forceSlow || playbackSpeed === 'slow',
+                          target.ipa,
+                        );
+                      }}
+                      aria-label={`Hear sound ${syl.segment}`}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 min-h-[32px] text-xs font-medium text-slate-600 hover:text-blue-700 bg-white border border-slate-200 hover:border-blue-300 rounded-md transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-blue-700"
+                    >
+                      {playingKey === chunkKey ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      )}
+                      <span>Hear</span>
+                    </button>
+                    <SpeakCheckButton
+                      targetText={
+                        resolveSyllableAudioTarget({
+                          segment: syl.segment,
+                          word: entry.word,
+                          ipa: syl.ipa,
+                          wordIpa: entry.ipa,
+                        }).text
+                      }
+                      displayLabel={`${syl.segment} in ${entry.word}`}
+                      devanagari={syl.devanagari}
+                      ipa={syl.ipa}
+                      variant="compact"
+                    />
+                  </div>
                 </div>
 
                 <p className="mt-2 text-[15px] leading-relaxed text-slate-700 max-w-[68ch]">

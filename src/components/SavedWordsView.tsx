@@ -18,6 +18,7 @@ import {
 import type { DictionaryEntry, SearchedWordRecord } from '../types/dictionary';
 import { playGermanAudio } from '../utils/audioPlayer';
 import { filterSearchedWords } from '../utils/searchedWords';
+import { SpeakCheckButton } from '../context/PronunciationCheckContext';
 
 interface CloudAccountInfo {
   uid: string;
@@ -369,6 +370,14 @@ export function SavedWordsView({
                           )}
                           <span>Slow</span>
                         </button>
+
+                        <SpeakCheckButton
+                          targetText={item.word}
+                          devanagari={item.devanagariFull}
+                          ipa={item.ipa}
+                          variant="compact"
+                          className="min-h-[34px]"
+                        />
                       </div>
 
                       <div className="flex items-center justify-between gap-2">
@@ -494,6 +503,14 @@ export function SavedWordsView({
                           )}
                           <span>Slow</span>
                         </button>
+
+                        <SpeakCheckButton
+                          targetText={entry.word}
+                          devanagari={entry.devanagariFull}
+                          ipa={entry.ipa}
+                          variant="compact"
+                          className="min-h-[34px]"
+                        />
                       </div>
 
                       <div className="flex items-center justify-between gap-2">

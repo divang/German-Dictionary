@@ -10,6 +10,7 @@ import {
 import type { A1ExamAttempt, A1MockQuestion } from '../types/a1';
 import { GOETHE_A1_PASS_PERCENT, gradeA1MockExam } from '../utils/a1Progress';
 import { playGermanAudio } from '../utils/audioPlayer';
+import { SpeakCheckButton } from '../context/PronunciationCheckContext';
 
 interface A1MockExamPanelProps {
   questions: A1MockQuestion[];
@@ -218,6 +219,12 @@ export function A1MockExamPanel({
                   >
                     <span>Slow</span>
                   </button>
+                  <SpeakCheckButton
+                    targetText={q.audioScript}
+                    displayLabel={`Question ${index + 1} (${q.sectionLabel})`}
+                    variant="compact"
+                    className="min-h-[36px]"
+                  />
                 </div>
               )}
 

@@ -15,6 +15,7 @@ import { SavedWordsView } from './components/SavedWordsView';
 import { SearchToolbar } from './components/SearchToolbar';
 import { SentenceTranslatorView } from './components/SentenceTranslatorView';
 import { WordListRail } from './components/WordListRail';
+import { PronunciationCheckProvider } from './context/PronunciationCheckContext';
 import { CURATED_WORDS } from './data/curatedWords';
 import { auth, googleProvider } from './firebase';
 import type { A1ExamAttempt, A1UserProgress, A1WorkspaceTab } from './types/a1';
@@ -849,7 +850,8 @@ export default function App() {
     : null;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
+    <PronunciationCheckProvider>
+      <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
       <Header
         activeView={activeView}
         savedCount={revisionCount}
@@ -1036,6 +1038,7 @@ export default function App() {
           <span>Devanagari phonetic guides · IPA · Cross-device A1 Cloud Sync</span>
         </div>
       </footer>
-    </div>
+      </div>
+    </PronunciationCheckProvider>
   );
 }
