@@ -7,6 +7,7 @@ export type AppView =
   | 'nearby'
   | 'sentences'
   | 'a1-certificate'
+  | 'youtube-a1'
   | 'saved';
 
 interface HeaderProps {
@@ -24,12 +25,13 @@ export function Header({ activeView, savedCount, onNavigate, onRandomWord }: Hea
     { id: 'nearby', label: 'Nearby' },
     { id: 'sentences', label: 'Sentences' },
     { id: 'a1-certificate', label: 'A1 Certificate' },
+    { id: 'youtube-a1', label: 'Learn German YouTube' },
     { id: 'saved', label: savedCount > 0 ? `Revision (${savedCount})` : 'Revision' },
   ];
 
   return (
     <header className="sticky top-0 z-30 h-16 bg-white/95 backdrop-blur-sm border-b border-slate-200">
-      <div className="max-w-[1200px] mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-3 sm:gap-4">
+      <div className="max-w-[1280px] mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-3">
         {/* Zone 1: Single text element wordmark */}
         <button
           type="button"
@@ -42,7 +44,7 @@ export function Header({ activeView, savedCount, onNavigate, onRandomWord }: Hea
         {/* Zone 2: Concise single-line text navigation links */}
         <nav
           aria-label="Primary navigation"
-          className="hidden md:flex items-center gap-3 lg:gap-5 text-[13px] lg:text-sm font-medium"
+          className="hidden lg:flex items-center gap-3 xl:gap-4 text-[13px] font-medium"
         >
           {navItems.map((item) => {
             const isActive = activeView === item.id;

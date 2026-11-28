@@ -15,6 +15,7 @@ import { SavedWordsView } from './components/SavedWordsView';
 import { SearchToolbar } from './components/SearchToolbar';
 import { SentenceTranslatorView } from './components/SentenceTranslatorView';
 import { WordListRail } from './components/WordListRail';
+import { YoutubeCourseView } from './components/YoutubeCourseView';
 import { PronunciationCheckProvider } from './context/PronunciationCheckContext';
 import { CURATED_WORDS } from './data/curatedWords';
 import { auth, googleProvider } from './firebase';
@@ -26,6 +27,7 @@ import type {
   WordCategory,
 } from './types/dictionary';
 import type { SentenceTranslationResult } from './types/sentence';
+import type { YoutubeA1Lesson, YoutubeLessonProgressRecord } from './types/youtubeCourse';
 import {
   DEFAULT_A1_PROGRESS,
   MAX_COMPLETED_LESSONS,
@@ -50,9 +52,12 @@ import {
   subscribeToExamAttempts,
   subscribeToSearchedWords,
   subscribeToUserProgress,
+  subscribeToYoutubeLessonProgress,
   syncInitialUserProgress,
   syncLocalSearchedWordsToCloud,
+  syncLocalYoutubeProgressToCloud,
   upsertSearchedWordToCloud,
+  upsertYoutubeLessonProgressToCloud,
 } from './utils/firebaseProgressSync';
 import {
   isPlaceholderEnglishMeaning,
@@ -61,6 +66,7 @@ import {
   toSafeWordDocId,
   upsertSearchedWordLocal,
 } from './utils/searchedWords';
+import { mergeYoutubeProgressMaps, sanitizeLessonProgressRecord } from './utils/youtubeCourse';
 
 const SAVED_IDS_KEY = 'lautbhasha_saved_ids_v1';
 const CUSTOM_ENTRIES_KEY = 'lautbhasha_custom_entries_v1';
@@ -68,6 +74,7 @@ const SEARCHED_WORDS_KEY = 'lautbhasha_searched_words_v1';
 const SENTENCE_HISTORY_KEY = 'lautbhasha_sentence_history_v1';
 const A1_PROGRESS_KEY = 'lautbhasha_a1_progress_v1';
 const A1_ATTEMPTS_KEY = 'lautbhasha_a1_attempts_v1';
+const YOUTUBE_A1_PROGRESS_KEY = 'lautbhasha_youtube_a1_progress_v1';
 
 function loadJsonFromStorage<T>(key: string, fallback: T): T {
   try {
@@ -123,6 +130,9 @@ export default function App() {
   const [examAttempts, setExamAttempts] = useState<A1ExamAttempt[]>(() =>
     loadJsonFromStorage<A1ExamAttempt[]>(A1_ATTEMPTS_KEY, []),
   );
+  const [youtubeProgressMap, setYoutubeProgressMap] = useState<
+    Record<string, YoutubeLessonProgressRecord>
+  >(() => loadJsonFromStorage<Record<string, YoutubeLessonProgressRecord>>(YOUTUBE_A1_PROGRESS_KEY, {}));
   const [activeEntryId, setActiveEntryId] = useState<string>(CURATED_WORDS[0].id);
   const [recentEntries, setRecentEntries] = useState<DictionaryEntry[]>([CURATED_WORDS[0]]);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -142,12 +152,14 @@ export default function App() {
   const latestProgressRef = useRef(a1Progress);
   const latestSavedIdsRef = useRef(savedIds);
   const latestSearchedWordsRef = useRef(searchedWords);
+  const latestYoutubeProgressRef = useRef(youtubeProgressMap);
   const cloudReadyRef = useRef(false);
   const inFlightTranslationRef = useRef<Set<string>>(new Set());
 
   latestProgressRef.current = a1Progress;
   latestSavedIdsRef.current = savedIds;
   latestSearchedWordsRef.current = searchedWords;
+  latestYoutubeProgressRef.current = youtubeProgressMap;
 
   useEffect(() => {
     let active = true;
@@ -214,12 +226,22 @@ export default function App() {
     }
   }, [examAttempts]);
 
-  // Listen to Firebase Auth state & synchronize Firestore progress + searched words for verified users
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(YOUTUBE_A1_PROGRESS_KEY, JSON.stringify(youtubeProgressMap));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [youtubeProgressMap]);
+
+  // Listen to Firebase Auth state & synchronize Firestore progress + searched words + YouTube notes
   useEffect(() => {
     let unsubProgress: (() => void) | null = null;
     let unsubAttempts: (() => void) | null = null;
     let unsubSearched: (() => void) | null = null;
+    let unsubYoutube: (() => void) | null = null;
     let hasSyncedLocalSearched = false;
+    let hasSyncedLocalYoutube = false;
     let cancelled = false;
 
     const cleanupListeners = () => {
@@ -229,7 +251,10 @@ export default function App() {
       unsubAttempts = null;
       unsubSearched?.();
       unsubSearched = null;
+      unsubYoutube?.();
+      unsubYoutube = null;
       hasSyncedLocalSearched = false;
+      hasSyncedLocalYoutube = false;
       cloudReadyRef.current = false;
     };
 
@@ -307,6 +332,32 @@ export default function App() {
           },
           () => {
             // Non-blocking: local searched words remain visible if Firestore list errors
+          },
+        );
+
+        unsubYoutube = subscribeToYoutubeLessonProgress(
+          user.uid,
+          (cloudYoutubeMap) => {
+            if (cancelled) return;
+            const localSnapshot = latestYoutubeProgressRef.current;
+            const combined = mergeYoutubeProgressMaps(localSnapshot, cloudYoutubeMap);
+            setYoutubeProgressMap(combined);
+
+            if (!hasSyncedLocalYoutube) {
+              hasSyncedLocalYoutube = true;
+              void syncLocalYoutubeProgressToCloud(
+                user.uid,
+                localSnapshot,
+                cloudYoutubeMap,
+                merged.progress,
+                merged.savedWordIds,
+              ).catch(() => {
+                // Non-blocking: local YouTube notebook remains saved in browser storage
+              });
+            }
+          },
+          () => {
+            // Non-blocking: local YouTube notebook remains active
           },
         );
       } catch {
@@ -509,6 +560,44 @@ export default function App() {
         } finally {
           setIsSyncingCloud(false);
         }
+      }
+    },
+    [firebaseUser],
+  );
+
+  const handleSaveYoutubeLessonProgress = useCallback(
+    (
+      lesson: YoutubeA1Lesson,
+      patch: Partial<Omit<YoutubeLessonProgressRecord, 'lessonId' | 'lessonNumber'>>,
+    ) => {
+      const existing = latestYoutubeProgressRef.current[lesson.id];
+      const nextRecord = sanitizeLessonProgressRecord(lesson.id, lesson.lessonNumber, {
+        ...existing,
+        ...patch,
+        updatedAtMs: Date.now(),
+      });
+
+      const nextMap = {
+        ...latestYoutubeProgressRef.current,
+        [lesson.id]: nextRecord,
+      };
+      latestYoutubeProgressRef.current = nextMap;
+      setYoutubeProgressMap(nextMap);
+
+      if (firebaseUser && firebaseUser.emailVerified && cloudReadyRef.current) {
+        setIsSyncingCloud(true);
+        void upsertYoutubeLessonProgressToCloud(
+          firebaseUser.uid,
+          nextRecord,
+          latestProgressRef.current,
+          latestSavedIdsRef.current,
+        )
+          .catch(() => {
+            // Notes remain safely saved locally on this device
+          })
+          .finally(() => {
+            setIsSyncingCloud(false);
+          });
       }
     },
     [firebaseUser],
@@ -837,6 +926,7 @@ export default function App() {
     { id: 'nearby', label: 'Nearby' },
     { id: 'sentences', label: 'Sentences' },
     { id: 'a1-certificate', label: 'A1 Certificate' },
+    { id: 'youtube-a1', label: 'Learn German YouTube' },
     { id: 'saved', label: revisionCount > 0 ? `Revision (${revisionCount})` : 'Revision' },
   ];
 
@@ -859,10 +949,10 @@ export default function App() {
         onRandomWord={handleRandomWord}
       />
 
-      {/* Non-sticky mobile navigation bar so sticky height stays strictly under 15% */}
+      {/* Non-sticky mobile/tablet navigation bar so sticky height stays strictly under 15% */}
       <nav
         aria-label="Mobile navigation"
-        className="md:hidden bg-white border-b border-slate-200 px-4 py-2 overflow-x-auto"
+        className="lg:hidden bg-white border-b border-slate-200 px-4 py-2 overflow-x-auto"
       >
         <div className="flex items-center gap-2 min-w-max">
           {mobileTabs.map((tab) => {
@@ -1009,6 +1099,22 @@ export default function App() {
           />
         )}
 
+        {activeView === 'youtube-a1' && (
+          <YoutubeCourseView
+            progressMap={youtubeProgressMap}
+            cloudUser={cloudAccount}
+            isAuthLoading={isAuthLoading}
+            isSyncingCloud={isSyncingCloud}
+            authError={authError}
+            onSignInGoogle={() => void handleSignInGoogle()}
+            onSignOut={() => void handleSignOut()}
+            onSaveLessonProgress={handleSaveYoutubeLessonProgress}
+            onLookupWordInDictionary={(word) => {
+              setQuery(word);
+              void handleDictionaryLookup(word);
+            }}
+          />
+        )}
 
         {activeView === 'saved' && (
           <SavedWordsView

@@ -205,6 +205,48 @@ service cloud.firestore {
         && data.lastSearchedAt is timestamp;
     }
 
+    // Pillar 2: Validation Blueprint for YoutubeLessonNote
+    function isValidYoutubeLessonNote(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'lessonNumber',
+          'completed',
+          'personalNotes',
+          'bestExerciseScore',
+          'practiceCount',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'lessonNumber',
+          'completed',
+          'personalNotes',
+          'bestExerciseScore',
+          'practiceCount',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.ownerId is string
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidId(data.ownerId)
+        && data.lessonNumber is number
+        && data.lessonNumber >= 1
+        && data.lessonNumber <= 100
+        && data.completed is bool
+        && data.personalNotes is string
+        && data.personalNotes.size() <= 4000
+        && data.bestExerciseScore is number
+        && data.bestExerciseScore >= 0
+        && data.bestExerciseScore <= 100
+        && data.practiceCount is number
+        && data.practiceCount >= 0
+        && data.practiceCount <= 1000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // Collection 1: /users/{userId} — Private A1 progress & bookmarks (PII-free)
     match /users/{userId} {
       // Evaluation order: Auth -> Static ID -> Ownership (no list to prevent scraping)
@@ -341,6 +383,54 @@ service cloud.firestore {
         allow delete: if isOwner(userId)
           && isValidId(userId)
           && isValidId(wordId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+      }
+
+      // Collection 4: /users/{userId}/youtubeLessonNotes/{lessonId}
+      match /youtubeLessonNotes/{lessonId} {
+        // Master Gate: verify parent /users/{userId} exists on single-doc ops
+        allow get: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(lessonId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        // Pillar 8: Secure list query enforcing resource.data.ownerId without get()/exists()
+        allow list: if isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+
+        // Pillar 7: Atomicity Guarantee — allow create when parent exists or is created in same batch
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(lessonId)
+          && isValidYoutubeLessonNote(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            exists(/databases/$(database)/documents/users/$(userId))
+            || existsAfter(/databases/$(database)/documents/users/$(userId))
+          );
+
+        // Action-based update wrapped by validation blueprint
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(lessonId)
+          && isValidYoutubeLessonNote(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'lessonNumber',
+            'completed',
+            'personalNotes',
+            'bestExerciseScore',
+            'practiceCount',
+            'updatedAt'
+          ]);
+
+        allow delete: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(lessonId)
           && exists(/databases/$(database)/documents/users/$(userId));
       }
     }

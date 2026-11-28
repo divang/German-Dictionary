@@ -17,7 +17,9 @@ import {
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import type { A1ExamAttempt, A1UserProgress } from '../types/a1';
 import type { SearchedWordRecord } from '../types/dictionary';
+import type { YoutubeLessonProgressRecord } from '../types/youtubeCourse';
 import { toSafeWordDocId } from './searchedWords';
+import { sanitizeLessonProgressRecord } from './youtubeCourse';
 import {
   MAX_COMPLETED_LESSONS,
   MAX_MASTERED_VOCAB,
@@ -510,4 +512,157 @@ export async function deleteSearchedWordFromCloud(uid: string, wordId: string): 
     handleFirestoreError(error, OperationType.DELETE, wordPath);
   }
 }
+
+/**
+ * Persists a single Learn German YouTube A1 lesson's personal notes, completion status,
+ * practice count, and best exercise score under /users/{uid}/youtubeLessonNotes/{lessonId}.
+ */
+export async function upsertYoutubeLessonProgressToCloud(
+  uid: string,
+  record: YoutubeLessonProgressRecord,
+  fallbackProgress: A1UserProgress,
+  fallbackSavedWordIds: string[],
+): Promise<void> {
+  const safe = sanitizeLessonProgressRecord(record.lessonId, record.lessonNumber, record);
+  const notePath = `users/${uid}/youtubeLessonNotes/${safe.lessonId}`;
+  const userRef = doc(db, 'users', uid);
+  const noteRef = doc(db, 'users', uid, 'youtubeLessonNotes', safe.lessonId);
+
+  try {
+    const [userSnap, noteSnap] = await Promise.all([getDoc(userRef), getDoc(noteRef)]);
+
+    if (!userSnap.exists()) {
+      const batch = writeBatch(db);
+      batch.set(userRef, {
+        ownerId: uid,
+        completedLessonIds: sanitizeIdList(fallbackProgress.completedLessonIds, MAX_COMPLETED_LESSONS),
+        masteredVocabIds: sanitizeIdList(fallbackProgress.masteredVocabIds, MAX_MASTERED_VOCAB),
+        savedWordIds: sanitizeIdList(fallbackSavedWordIds, MAX_SAVED_WORDS),
+        lastActiveModuleId: sanitizeModuleId(fallbackProgress.lastActiveModuleId),
+        lastActiveTab: sanitizeA1Tab(fallbackProgress.lastActiveTab),
+        bestMockScore: clampNumber(fallbackProgress.bestMockScore, 0, 100),
+        totalMockAttempts: clampNumber(fallbackProgress.totalMockAttempts, 0, 1000),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      batch.set(noteRef, {
+        ownerId: uid,
+        lessonNumber: safe.lessonNumber,
+        completed: safe.completed,
+        personalNotes: safe.personalNotes,
+        bestExerciseScore: safe.bestExerciseScore,
+        practiceCount: safe.practiceCount,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      await batch.commit();
+      return;
+    }
+
+    if (noteSnap.exists()) {
+      await updateDoc(noteRef, {
+        lessonNumber: safe.lessonNumber,
+        completed: safe.completed,
+        personalNotes: safe.personalNotes,
+        bestExerciseScore: safe.bestExerciseScore,
+        practiceCount: safe.practiceCount,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(noteRef, {
+        ownerId: uid,
+        lessonNumber: safe.lessonNumber,
+        completed: safe.completed,
+        personalNotes: safe.personalNotes,
+        bestExerciseScore: safe.bestExerciseScore,
+        practiceCount: safe.practiceCount,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, notePath);
+  }
+}
+
+/**
+ * Subscribes to live cross-device Learn German YouTube A1 notebook updates for the owner.
+ */
+export function subscribeToYoutubeLessonProgress(
+  uid: string,
+  onUpdate: (progressMap: Record<string, YoutubeLessonProgressRecord>) => void,
+  onError: (err: Error) => void,
+): () => void {
+  const notesPath = `users/${uid}/youtubeLessonNotes`;
+  const notesQuery = query(
+    collection(db, 'users', uid, 'youtubeLessonNotes'),
+    where('ownerId', '==', uid),
+    limit(100),
+  );
+
+  return onSnapshot(
+    notesQuery,
+    (querySnap) => {
+      const map: Record<string, YoutubeLessonProgressRecord> = {};
+      for (const d of querySnap.docs) {
+        const data = d.data();
+        const lessonNumber =
+          typeof data.lessonNumber === 'number' && Number.isFinite(data.lessonNumber)
+            ? data.lessonNumber
+            : 1;
+        map[d.id] = sanitizeLessonProgressRecord(d.id, lessonNumber, {
+          completed: Boolean(data.completed),
+          personalNotes: typeof data.personalNotes === 'string' ? data.personalNotes : '',
+          bestExerciseScore: typeof data.bestExerciseScore === 'number' ? data.bestExerciseScore : 0,
+          practiceCount: typeof data.practiceCount === 'number' ? data.practiceCount : 0,
+          updatedAtMs: parseTimestampMs(data.updatedAt),
+        });
+      }
+      onUpdate(map);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, notesPath);
+      } catch (wrapped) {
+        onError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+      }
+    },
+  );
+}
+
+/**
+ * Uploads any locally saved YouTube A1 lesson notes/progress that are newer or missing in Firestore.
+ */
+export async function syncLocalYoutubeProgressToCloud(
+  uid: string,
+  localMap: Record<string, YoutubeLessonProgressRecord>,
+  cloudMap: Record<string, YoutubeLessonProgressRecord>,
+  fallbackProgress: A1UserProgress,
+  fallbackSavedWordIds: string[],
+): Promise<void> {
+  const entries = Object.values(localMap).filter((local) => {
+    const hasMeaningfulData =
+      local.completed ||
+      local.personalNotes.trim().length > 0 ||
+      local.bestExerciseScore > 0 ||
+      local.practiceCount > 0;
+    if (!hasMeaningfulData) return false;
+
+    const cloud = cloudMap[local.lessonId];
+    if (!cloud) return true;
+    return (
+      (local.completed && !cloud.completed) ||
+      local.bestExerciseScore > cloud.bestExerciseScore ||
+      local.practiceCount > cloud.practiceCount ||
+      (local.personalNotes.trim().length > 0 &&
+        local.personalNotes !== cloud.personalNotes &&
+        local.updatedAtMs > cloud.updatedAtMs)
+    );
+  });
+
+  for (const record of entries.slice(0, 70)) {
+    await upsertYoutubeLessonProgressToCloud(uid, record, fallbackProgress, fallbackSavedWordIds);
+  }
+}
+
 

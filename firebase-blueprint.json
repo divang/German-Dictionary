@@ -209,6 +209,61 @@
         "createdAt",
         "lastSearchedAt"
       ]
+    },
+    "YoutubeLessonNote": {
+      "title": "YoutubeLessonNote",
+      "description": "Private per-user digital notebook, completion status, practice count, and best exercise score for each Learn German YouTube A1 lesson.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the learner who owns this lesson notebook.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "lessonNumber": {
+          "type": "number",
+          "description": "Lesson number in the Learn German A1 YouTube series (1-100)."
+        },
+        "completed": {
+          "type": "boolean",
+          "description": "Whether the learner has marked this lesson completed."
+        },
+        "personalNotes": {
+          "type": "string",
+          "description": "Learner's personal digital notebook text for this lesson (max 4000 chars).",
+          "maxLength": 4000
+        },
+        "bestExerciseScore": {
+          "type": "number",
+          "description": "Highest percentage score (0-100) achieved on this lesson's exercises."
+        },
+        "practiceCount": {
+          "type": "number",
+          "description": "Number of completed speaking/flashcard practice sessions for this lesson (0-1000)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when this lesson record was first created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest notebook or exercise update."
+        }
+      },
+      "required": [
+        "ownerId",
+        "lessonNumber",
+        "completed",
+        "personalNotes",
+        "bestExerciseScore",
+        "practiceCount",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -229,6 +284,12 @@
         "$ref": "#/entities/SearchedWord"
       },
       "description": "Permanent per-user dictionary search history with English & Hindi meanings synced across laptop and mobile."
+    },
+    "/users/{userId}/youtubeLessonNotes/{lessonId}": {
+      "schema": {
+        "$ref": "#/entities/YoutubeLessonNote"
+      },
+      "description": "Private per-user Learn German YouTube A1 lesson notes, completion status, practice sessions, and exercise scores."
     }
   }
 }

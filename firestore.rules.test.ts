@@ -23,6 +23,7 @@ test('firestore.rules covers every collection declared in firebase-blueprint.jso
     '/users/{userId}',
     '/users/{userId}/examAttempts/{attemptId}',
     '/users/{userId}/searchedWords/{wordId}',
+    '/users/{userId}/youtubeLessonNotes/{lessonId}',
   ]);
 
   // Verify UserProgress validation & action-based updates
@@ -44,6 +45,13 @@ test('firestore.rules covers every collection declared in firebase-blueprint.jso
   assert.ok(rulesText.includes('incoming().lastSearchedAt == request.time'));
   assert.ok(rulesText.includes('data.hindiMeaning.size() <= 240'));
   assert.ok(rulesText.includes('data.englishMeaning.size() <= 240'));
+
+  // Verify YoutubeLessonNote validation, bounds, Master Gate, and action-based updates
+  assert.ok(rulesText.includes('function isValidYoutubeLessonNote(data, userId)'));
+  assert.ok(rulesText.includes('match /youtubeLessonNotes/{lessonId}'));
+  assert.ok(rulesText.includes('data.personalNotes.size() <= 4000'));
+  assert.ok(rulesText.includes('data.lessonNumber >= 1'));
+  assert.ok(rulesText.includes('data.bestExerciseScore <= 100'));
 });
 
 test('Dirty Dozen security assertions: rules block all 12 adversarial attack vectors', () => {
