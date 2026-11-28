@@ -1112,6 +1112,28 @@ async function startServer() {
     res.json({ suggestions });
   });
 
+  app.get('/api/basics/alphabet-words', async (req, res) => {
+    const letter = typeof req.query.letter === 'string' ? req.query.letter.trim().slice(0, 2) : '';
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const limit = Math.min(10, Math.max(1, Number(req.query.limit) || 5));
+    const excludeRaw = typeof req.query.exclude === 'string' ? req.query.exclude : '';
+    const excludeSet = new Set(
+      excludeRaw
+        .split(',')
+        .map((w) => w.trim().toLowerCase())
+        .filter(Boolean),
+    );
+
+    if (!letter) {
+      res.status(400).json({ error: 'Missing alphabet letter parameter.' });
+      return;
+    }
+
+    await germanLexicon.ensureLoaded();
+    const data = germanLexicon.getWordsByLetter(letter, offset, limit, excludeSet);
+    res.json(data);
+  });
+
   app.post('/api/en-to-de', async (req, res) => {
     const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
     if (!query || query.length < 2) {

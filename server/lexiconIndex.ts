@@ -511,6 +511,141 @@ class GermanLexiconIndex {
 
     return results;
   }
+
+  /**
+   * Returns paginated real German words starting with (or containing, for ß) a specific alphabet letter
+   * so learners can click "Load More Words" inside the Alphabet section.
+   */
+  public getWordsByLetter(
+    rawLetter: string,
+    offset = 0,
+    limit = 5,
+    excludeLower: Set<string> = new Set(),
+  ): {
+    words: {
+      word: string;
+      article: 'der' | 'die' | 'das' | '';
+      devanagari: string;
+      english: string;
+      sentenceGerman: string;
+      sentenceEnglish: string;
+      source: 'corpus';
+    }[];
+    hasMore: boolean;
+  } {
+    const letter = rawLetter.trim().toLowerCase();
+    if (!letter) return { words: [], hasMore: false };
+
+    const isEszett = letter === 'ß';
+    const skipFunctionWords = new Set([
+      'aber', 'auch', 'auf', 'aus', 'alle', 'als', 'also', 'am', 'an', 'bei', 'bis',
+      'da', 'damit', 'dann', 'das', 'dass', 'dem', 'den', 'denn', 'der', 'des', 'die',
+      'doch', 'dort', 'ein', 'eine', 'einem', 'einen', 'einer', 'eines', 'für', 'hat',
+      'hier', 'ich', 'ihm', 'ihn', 'ihr', 'im', 'in', 'ist', 'jedoch', 'kein', 'keine',
+      'man', 'mehr', 'mit', 'nach', 'nicht', 'noch', 'nun', 'nur', 'oder', 'ohne',
+      'sehr', 'sein', 'seit', 'sich', 'sie', 'sind', 'so', 'sogar', 'sondern', 'über',
+      'um', 'und', 'uns', 'unter', 'vom', 'von', 'vor', 'war', 'was', 'weil', 'wenn',
+      'wer', 'wie', 'wir', 'wird', 'wo', 'zu', 'zum', 'zur', 'zwar',
+    ]);
+    const skipEnglishGloss = new Set([
+      'and', 'but', 'or', 'also', 'too', 'on', 'in', 'at', 'of', 'to', 'from',
+      'the', 'a', 'an', 'if', 'that', 'this', 'with', 'for', 'by', 'as', 'so', 'not',
+    ]);
+
+    const matched: RawLexiconRow[] = [];
+    const seen = new Set<string>(excludeLower);
+    const needed = offset + limit + 1;
+
+    const collectPass = (strictConcreteOnly: boolean) => {
+      for (let i = 0; i < this.rows.length; i++) {
+        if (matched.length >= needed) break;
+        const row = this.rows[i];
+        if (!row.word || row.word.includes(' ') || row.word.length < (strictConcreteOnly ? 4 : 3) || row.word.length > 20) {
+          continue;
+        }
+        if (!row.english || row.english.length > 80) continue;
+        if (!/^[a-zäöüßA-ZÄÖÜ]+$/.test(row.word)) continue;
+
+        const lowerWord = row.word.toLowerCase();
+        if (isEszett ? !lowerWord.includes('ß') : !lowerWord.startsWith(letter)) {
+          continue;
+        }
+        if (seen.has(lowerWord) || skipFunctionWords.has(lowerWord)) continue;
+
+        const shortEng = (row.english.split(/[;,]/)[0]?.trim() || row.english)
+          .replace(/\([^)]*\)/g, '')
+          .trim();
+        if (!shortEng || skipEnglishGloss.has(shortEng.toLowerCase())) continue;
+
+        const posLower = row.pos.toLowerCase();
+        const isNoun = row.article === 'der' || row.article === 'die' || row.article === 'das';
+        const isTrueVerb = !/\badverb\b/.test(posLower) && /\bverb\b/.test(posLower);
+        const isAdj = /\badj/.test(posLower);
+
+        if (strictConcreteOnly && !isNoun && !isTrueVerb && !isAdj) {
+          continue;
+        }
+
+        seen.add(lowerWord);
+        matched.push(row);
+      }
+    };
+
+    // Pass 1: Prefer clear everyday nouns, true verbs, and adjectives
+    collectPass(true);
+    // Pass 2: Fallback for rare letters (e.g. X, Y, ß) if fewer than needed
+    if (matched.length < needed) {
+      collectPass(false);
+    }
+
+    const slice = matched.slice(offset, offset + limit);
+    const hasMore = matched.length > offset + limit;
+
+    const words = slice.map((row) => {
+      const art =
+        row.article === 'der' || row.article === 'die' || row.article === 'das'
+          ? row.article
+          : '';
+      const shortEnglish = row.english.split(/[;,]/)[0]?.trim() || row.english;
+      const cleanEng = shortEnglish.replace(/\([^)]*\)/g, '').trim() || shortEnglish;
+      const posLower = row.pos.toLowerCase();
+      const isTrueVerb = !/\badverb\b/.test(posLower) && /\bverb\b/.test(posLower);
+      const isAdj = /\badj/.test(posLower);
+
+      let sentenceGerman = `Heute lerne ich das deutsche Wort „${row.word}“.`;
+      let sentenceEnglish = `Today I am learning the German word "${cleanEng}".`;
+
+      if (art === 'der') {
+        sentenceGerman = `Der ${row.word} ist heute sehr wichtig.`;
+        sentenceEnglish = `The ${cleanEng} is very important today.`;
+      } else if (art === 'die') {
+        sentenceGerman = `Die ${row.word} ist sehr wichtig.`;
+        sentenceEnglish = `The ${cleanEng} is very important.`;
+      } else if (art === 'das') {
+        sentenceGerman = `Das ${row.word} ist sehr interessant.`;
+        sentenceEnglish = `The ${cleanEng} is very interesting.`;
+      } else if (isTrueVerb) {
+        const bareVerbEng = cleanEng.replace(/^to\s+/i, '');
+        sentenceGerman = `Wir wollen heute ${row.word}.`;
+        sentenceEnglish = `We want to ${bareVerbEng} today.`;
+      } else if (isAdj) {
+        sentenceGerman = `Das finde ich sehr ${row.word}.`;
+        sentenceEnglish = `I find that very ${cleanEng}.`;
+      }
+
+      return {
+        word: row.word,
+        article: art as 'der' | 'die' | 'das' | '',
+        devanagari: transliterateGermanToDevanagari(row.word),
+        english: shortEnglish,
+        sentenceGerman,
+        sentenceEnglish,
+        source: 'corpus' as const,
+      };
+    });
+
+    return { words, hasMore };
+  }
 }
 
 export const germanLexicon = new GermanLexiconIndex();

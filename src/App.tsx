@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { A1CertificateView } from './components/A1CertificateView';
+import { BasicsHubView } from './components/BasicsHubView';
 import { EnglishToGermanView } from './components/EnglishToGermanView';
 import { Header, type AppView } from './components/Header';
 import { NearbyGermanView } from './components/NearbyGermanView';
@@ -831,6 +832,7 @@ export default function App() {
   const mobileTabs: { id: AppView; label: string }[] = [
     { id: 'dictionary', label: 'Dictionary' },
     { id: 'en-to-de', label: 'English → German' },
+    { id: 'basics', label: 'Basics' },
     { id: 'nearby', label: 'Nearby' },
     { id: 'sentences', label: 'Sentences' },
     { id: 'a1-certificate', label: 'A1 Certificate' },
@@ -947,6 +949,15 @@ export default function App() {
 
         {activeView === 'en-to-de' && (
           <EnglishToGermanView
+            onLookupWordInDictionary={(word) => {
+              setQuery(word);
+              void handleDictionaryLookup(word);
+            }}
+          />
+        )}
+
+        {activeView === 'basics' && (
+          <BasicsHubView
             onLookupWordInDictionary={(word) => {
               setQuery(word);
               void handleDictionaryLookup(word);

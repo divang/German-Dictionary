@@ -3,6 +3,7 @@ import { Shuffle } from 'lucide-react';
 export type AppView =
   | 'dictionary'
   | 'en-to-de'
+  | 'basics'
   | 'nearby'
   | 'sentences'
   | 'a1-certificate'
@@ -19,6 +20,7 @@ export function Header({ activeView, savedCount, onNavigate, onRandomWord }: Hea
   const navItems: { id: AppView; label: string }[] = [
     { id: 'dictionary', label: 'Dictionary' },
     { id: 'en-to-de', label: 'English → German' },
+    { id: 'basics', label: 'Basics' },
     { id: 'nearby', label: 'Nearby' },
     { id: 'sentences', label: 'Sentences' },
     { id: 'a1-certificate', label: 'A1 Certificate' },
@@ -27,7 +29,7 @@ export function Header({ activeView, savedCount, onNavigate, onRandomWord }: Hea
 
   return (
     <header className="sticky top-0 z-30 h-16 bg-white/95 backdrop-blur-sm border-b border-slate-200">
-      <div className="max-w-[1200px] mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-4 sm:gap-5">
+      <div className="max-w-[1200px] mx-auto h-full px-4 sm:px-6 flex items-center justify-between gap-3 sm:gap-4">
         {/* Zone 1: Single text element wordmark */}
         <button
           type="button"
@@ -40,7 +42,7 @@ export function Header({ activeView, savedCount, onNavigate, onRandomWord }: Hea
         {/* Zone 2: Concise single-line text navigation links */}
         <nav
           aria-label="Primary navigation"
-          className="hidden md:flex items-center gap-4 lg:gap-5 text-[13px] lg:text-sm font-medium"
+          className="hidden md:flex items-center gap-3 lg:gap-5 text-[13px] lg:text-sm font-medium"
         >
           {navItems.map((item) => {
             const isActive = activeView === item.id;
