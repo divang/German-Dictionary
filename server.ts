@@ -871,6 +871,354 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
+  // 1. WORD FORMATION / COMPOUND DECOMPOSITION (POST /api/word-formation)
+  // =========================================================================
+  const WORD_FORMATION_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+      isCompoundOrDerived: {
+        type: Type.BOOLEAN,
+        description: 'True if the German word is a compound word (e.g. Wasserflasche = Wasser + Flasche, Schlafzimmer = schlafen + Zimmer) or formed from clear prefix/root/suffix parts (e.g. Entschuldigung = ent- + Schuld + -igung). False if it is a simple indivisible root word.',
+      },
+      formulaText: {
+        type: Type.STRING,
+        description: 'Concise equation in the exact learner-friendly style, e.g. "Wasser (water) + Flasche (bottle, feminine)" or "schlafen (to sleep) + Zimmer (room, neuter)".',
+      },
+      explanation: {
+        type: Type.STRING,
+        description: '1 to 2 crisp sentences explaining how the parts combine and why the whole word takes its gender (e.g. the last noun Flasche is feminine, so Wasserflasche is die Wasserflasche).',
+      },
+      parts: {
+        type: Type.ARRAY,
+        description: 'Ordered building-block words or morphemes that form this German word (2 to 5 items for compounds/derived words, or 1 root item for base words).',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            german: {
+              type: Type.STRING,
+              description: 'Canonical base German word WITHOUT der/die/das article (e.g. "Wasser", "Flasche", "schlafen", "Zimmer") or bound affix with hyphen (e.g. "ent-", "-chen").',
+            },
+            article: {
+              type: Type.STRING,
+              description: 'Gender article for standalone nouns: der, die, das, or empty string for verbs/adjectives/affixes.',
+            },
+            genderLabel: {
+              type: Type.STRING,
+              description: 'For nouns: masculine, feminine, or neuter. Empty string otherwise.',
+            },
+            meaning: {
+              type: Type.STRING,
+              description: 'Concise English meaning of this individual building-block word (e.g. "water", "bottle", "to sleep", "room").',
+            },
+            hindiMeaning: {
+              type: Type.STRING,
+              description: 'Natural Hindi meaning in Devanagari script for this individual part (e.g. "पानी", "बोतल", "सोना", "कमरा").',
+            },
+            devanagari: {
+              type: Type.STRING,
+              description: 'Accurate Devanagari pronunciation of this separated German word (e.g. "वासर", "फ़्लाशे", "श्लाफ़न", "त्सिमर").',
+            },
+            role: {
+              type: Type.STRING,
+              description: 'Short grammatical role: noun, verb, adjective, prefix, suffix, or linking letter.',
+            },
+            speakable: {
+              type: Type.BOOLEAN,
+              description: 'True for standalone German words that can be spoken cleanly by German TTS; false for tiny linking letters like -s- or short bound suffixes.',
+            },
+          },
+          required: [
+            'german',
+            'article',
+            'genderLabel',
+            'meaning',
+            'hindiMeaning',
+            'devanagari',
+            'role',
+            'speakable',
+          ],
+        },
+      },
+    },
+    required: ['isCompoundOrDerived', 'formulaText', 'explanation', 'parts'],
+  };
+
+  const wordFormationCache = new Map<string, Record<string, unknown>>();
+  const MAX_FORMATION_CACHE = 400;
+
+  app.post('/api/word-formation', async (req, res) => {
+    const word = typeof req.body?.word === 'string' ? req.body.word.trim().slice(0, 100) : '';
+    const article = typeof req.body?.article === 'string' ? req.body.article.trim().slice(0, 10) : '';
+    const englishMeaning =
+      typeof req.body?.englishMeaning === 'string' ? req.body.englishMeaning.trim().slice(0, 160) : '';
+
+    if (!word) {
+      res.status(400).json({ error: 'Please provide a German word to explain.' });
+      return;
+    }
+
+    const cacheKey = `${article.toLowerCase()}::${word.toLowerCase()}`;
+    const cached = wordFormationCache.get(cacheKey);
+    if (cached) {
+      res.json({ formation: cached, cached: true });
+      return;
+    }
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'Word formation breakdown requires a configured Gemini API key.',
+      });
+      return;
+    }
+
+    const prompt = [
+      `Explain how the German word "${article ? `${article} ` : ''}${word}"${englishMeaning ? ` (${englishMeaning})` : ''} is formed from its building-block words or roots, specifically for a native Hindi speaker learning German.`,
+      'Examples of the exact style desired:',
+      '- die Wasserflasche (water bottle): Wasser (water) + Flasche (bottle, feminine) -> parts: Wasser (das, neuter, water, पानी), Flasche (die, feminine, bottle, बोतल).',
+      '- das Schlafzimmer (bedroom): schlafen (to sleep) + Zimmer (room, neuter) -> parts: schlafen (verb, to sleep, सोना), Zimmer (das, neuter, room, कमरा).',
+      '- das Krankenhaus (hospital): krank (sick) + Haus (house, neuter).',
+      '- die Entschuldigung (excuse me): ent- (prefix: away/remove) + Schuld (guilt/debt, feminine) + -igung (noun suffix).',
+      'Always use the canonical base German dictionary form for each separated word (e.g. "schlafen" for Schlaf-, "Brot" for Bröt-, "krank" for Kranken-) WITHOUT putting der/die/das inside the german field (put der/die/das in the separate article field).',
+      'If the word is a simple base word or loanword (like Friseur or Apfel), set isCompoundOrDerived=false, include its 1 base root/origin part, and explain its origin concisely.',
+    ].join('\n');
+
+    const attempts: { model: string; waitBeforeMs: number }[] = [
+      { model: 'gemini-3.1-flash-lite', waitBeforeMs: 0 },
+      { model: 'gemini-4-hydrogen', waitBeforeMs: 250 },
+    ];
+
+    let lastErr: unknown;
+    for (const attempt of attempts) {
+      if (attempt.waitBeforeMs > 0) await delay(attempt.waitBeforeMs);
+      try {
+        const response = await ai.models.generateContent({
+          model: attempt.model,
+          contents: prompt,
+          config: {
+            systemInstruction:
+              'You are an expert German morphology and vocabulary teacher for Hindi speakers. Break German compound and derived words into clear, accurate component words with gender, English & Hindi meanings, and Devanagari pronunciation.',
+            responseMimeType: 'application/json',
+            responseSchema: WORD_FORMATION_SCHEMA,
+          },
+        });
+        const rawText = (response.text ?? '').trim();
+        if (rawText) {
+          const parsed = JSON.parse(rawText) as Record<string, unknown>;
+          if (wordFormationCache.size >= MAX_FORMATION_CACHE) {
+            const oldest = wordFormationCache.keys().next().value;
+            if (oldest) wordFormationCache.delete(oldest);
+          }
+          wordFormationCache.set(cacheKey, parsed);
+          res.json({ formation: parsed, cached: false });
+          return;
+        }
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    console.error(
+      '[api/word-formation] Error:',
+      lastErr instanceof Error ? lastErr.message : String(lastErr),
+    );
+    res.status(502).json({ error: 'Could not explain word formation right now.' });
+  });
+
+  // =========================================================================
+  // 2. ENGLISH -> GERMAN DICTIONARY (GET /api/en-to-de/suggest & POST /api/en-to-de)
+  // =========================================================================
+  const EN_TO_DE_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+      hindiGloss: {
+        type: Type.STRING,
+        description: 'Natural everyday Hindi meaning of the queried English word in Devanagari script.',
+      },
+      matches: {
+        type: Type.ARRAY,
+        description: '3 to 6 most useful, natural German translations ranked from most common everyday usage first.',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            germanWord: {
+              type: Type.STRING,
+              description: 'Exact canonical German word WITHOUT der/die/das article.',
+            },
+            article: {
+              type: Type.STRING,
+              description: 'German noun gender article: der, die, das, or empty string if verb/adjective/phrase.',
+            },
+            partOfSpeech: {
+              type: Type.STRING,
+              description: 'e.g. Masculine noun, Feminine noun, Neuter noun, Verb, Adjective, Everyday phrase.',
+            },
+            cefr: {
+              type: Type.STRING,
+              description: 'CEFR level: A1, A2, B1, B2, or C1.',
+            },
+            devanagari: {
+              type: Type.STRING,
+              description: 'Accurate German pronunciation written in Hindi Devanagari with hyphens and nuqta dots (ज़, ख़, ग़, फ़).',
+            },
+            ipa: {
+              type: Type.STRING,
+              description: 'Standard German IPA transcription enclosed in slashes.',
+            },
+            nuance: {
+              type: Type.STRING,
+              description: 'Short, practical explanation of when to use this German word (and if it is a compound, hint its parts).',
+            },
+            hindiMeaning: {
+              type: Type.STRING,
+              description: 'Natural Hindi equivalent in Devanagari script.',
+            },
+            exampleGerman: {
+              type: Type.STRING,
+              description: 'Short natural A1/A2 German sentence using this word.',
+            },
+            exampleEnglish: {
+              type: Type.STRING,
+              description: 'Natural English translation of exampleGerman.',
+            },
+          },
+          required: [
+            'germanWord',
+            'article',
+            'partOfSpeech',
+            'cefr',
+            'devanagari',
+            'ipa',
+            'nuance',
+            'hindiMeaning',
+            'exampleGerman',
+            'exampleEnglish',
+          ],
+        },
+      },
+    },
+    required: ['hindiGloss', 'matches'],
+  };
+
+  const enToDeCache = new Map<string, Record<string, unknown>>();
+  const MAX_EN_TO_DE_CACHE = 300;
+
+  app.get('/api/en-to-de/suggest', async (req, res) => {
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    const limit = Math.min(12, Math.max(1, Number(req.query.limit) || 8));
+    await germanLexicon.ensureLoaded();
+    const suggestions = germanLexicon.suggestEnglish(q, limit);
+    res.json({ suggestions });
+  });
+
+  app.post('/api/en-to-de', async (req, res) => {
+    const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
+    if (!query || query.length < 2) {
+      res.status(400).json({ error: 'Please enter an English word or short phrase (at least 2 letters).' });
+      return;
+    }
+    if (query.length > 80) {
+      res.status(400).json({ error: 'Keep the English word search under 80 characters.' });
+      return;
+    }
+
+    const cacheKey = query.toLowerCase();
+    const cached = enToDeCache.get(cacheKey);
+    if (cached) {
+      res.json({ result: cached, source: 'ai', cached: true });
+      return;
+    }
+
+    await germanLexicon.ensureLoaded();
+    const localRows = germanLexicon.searchEnglishToGerman(query, 10);
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      if (localRows.length > 0) {
+        const { transliterateGermanToDevanagari } = await import('./src/utils/germanPhonetics');
+        const fallbackMatches = localRows.slice(0, 6).map((row) => ({
+          germanWord: row.word,
+          article: row.article,
+          partOfSpeech: row.pos || (row.article ? 'Noun' : 'German word'),
+          cefr: 'A1',
+          devanagari: transliterateGermanToDevanagari(row.word),
+          ipa: row.ipa,
+          nuance: row.english,
+          hindiMeaning: '',
+          exampleGerman: '',
+          exampleEnglish: '',
+        }));
+        res.json({
+          result: { englishQuery: query, hindiGloss: '', matches: fallbackMatches },
+          source: 'dictionary',
+          cached: false,
+        });
+        return;
+      }
+      res.status(503).json({
+        error: 'English-to-German lookup is unavailable right now because the Gemini API key is not configured.',
+      });
+      return;
+    }
+
+    const corpusHintText =
+      localRows.length > 0
+        ? `Entries found in our local German-English corpus (use the most natural everyday ones and add better everyday A1/A2 words if needed): ${localRows
+            .slice(0, 8)
+            .map((r) => `${r.article ? `${r.article} ` : ''}${r.word} (${r.english})`)
+            .join('; ')}.`
+        : '';
+
+    const prompt = [
+      `Translate the English word or phrase "${query}" into the 3 to 6 most natural, commonly used German words for a native Hindi speaker learning German.`,
+      corpusHintText,
+      'Put the #1 most common everyday German word first (e.g. for "water bottle" -> die Wasserflasche; for "bedroom" -> das Schlafzimmer; for "hospital" -> das Krankenhaus).',
+      'Always keep germanWord clean WITHOUT der/die/das (put der/die/das in the article field so audio playback speaks pure German without the article).',
+      'Include crisp Devanagari pronunciation, IPA, practical usage nuance, natural Hindi meaning, and a short A1/A2 German example sentence with English translation.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const attempts: { model: string; waitBeforeMs: number }[] = [
+      { model: 'gemini-3.1-flash-lite', waitBeforeMs: 0 },
+      { model: 'gemini-4-hydrogen', waitBeforeMs: 250 },
+    ];
+
+    let lastErr: unknown;
+    for (const attempt of attempts) {
+      if (attempt.waitBeforeMs > 0) await delay(attempt.waitBeforeMs);
+      try {
+        const response = await ai.models.generateContent({
+          model: attempt.model,
+          contents: prompt,
+          config: {
+            systemInstruction:
+              'You are a precise English–German–Hindi dictionary editor helping native Hindi speakers learn authentic everyday German words with accurate gender articles and Devanagari pronunciation.',
+            responseMimeType: 'application/json',
+            responseSchema: EN_TO_DE_SCHEMA,
+          },
+        });
+        const rawText = (response.text ?? '').trim();
+        if (rawText) {
+          const parsed = JSON.parse(rawText) as Record<string, unknown>;
+          if (enToDeCache.size >= MAX_EN_TO_DE_CACHE) {
+            const oldest = enToDeCache.keys().next().value;
+            if (oldest) enToDeCache.delete(oldest);
+          }
+          enToDeCache.set(cacheKey, parsed);
+          res.json({ result: parsed, source: 'ai', cached: false });
+          return;
+        }
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    console.error('[api/en-to-de] Error:', lastErr instanceof Error ? lastErr.message : String(lastErr));
+    res.status(502).json({ error: 'Could not look up German translations right now. Please retry.' });
+  });
+
   app.post('/api/pronounce', async (req, res) => {
     const rawQuery = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
     if (!rawQuery) {

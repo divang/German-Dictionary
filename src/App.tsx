@@ -3,8 +3,8 @@ import type { FormEvent } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { A1CertificateView } from './components/A1CertificateView';
+import { EnglishToGermanView } from './components/EnglishToGermanView';
 import { Header, type AppView } from './components/Header';
-import { MinimalPairsView } from './components/MinimalPairsView';
 import { NearbyGermanView } from './components/NearbyGermanView';
 import {
   PronunciationEntryView,
@@ -13,7 +13,6 @@ import {
 import { SavedWordsView } from './components/SavedWordsView';
 import { SearchToolbar } from './components/SearchToolbar';
 import { SentenceTranslatorView } from './components/SentenceTranslatorView';
-import { SoundGuideView } from './components/SoundGuideView';
 import { WordListRail } from './components/WordListRail';
 import { CURATED_WORDS } from './data/curatedWords';
 import { auth, googleProvider } from './firebase';
@@ -823,15 +822,6 @@ export default function App() {
     selectEntry(chosen, true);
   };
 
-  const handleOpenWordById = (wordId: string) => {
-    const found = allEntries.find((w) => w.id === wordId);
-    if (found) {
-      setQuery('');
-      setCategory('all');
-      selectEntry(found, true);
-    }
-  };
-
   const revisionCount = searchedWords.length > 0 ? searchedWords.length : savedIds.length;
   const activeEntryIsInHistory = useMemo(
     () => searchedWords.some((item) => item.id === toSafeWordDocId(activeEntry.word)),
@@ -840,11 +830,10 @@ export default function App() {
 
   const mobileTabs: { id: AppView; label: string }[] = [
     { id: 'dictionary', label: 'Dictionary' },
+    { id: 'en-to-de', label: 'English → German' },
     { id: 'nearby', label: 'Nearby' },
     { id: 'sentences', label: 'Sentences' },
     { id: 'a1-certificate', label: 'A1 Certificate' },
-    { id: 'sound-guide', label: 'Sound Guide' },
-    { id: 'minimal-pairs', label: 'Pairs' },
     { id: 'saved', label: revisionCount > 0 ? `Revision (${revisionCount})` : 'Revision' },
   ];
 
@@ -956,6 +945,15 @@ export default function App() {
           </div>
         )}
 
+        {activeView === 'en-to-de' && (
+          <EnglishToGermanView
+            onLookupWordInDictionary={(word) => {
+              setQuery(word);
+              void handleDictionaryLookup(word);
+            }}
+          />
+        )}
+
         {activeView === 'nearby' && (
           <NearbyGermanView
             onLookupWordInDictionary={(word) => {
@@ -998,19 +996,6 @@ export default function App() {
           />
         )}
 
-        {activeView === 'sound-guide' && (
-          <SoundGuideView curatedWords={CURATED_WORDS} onOpenWord={handleOpenWordById} />
-        )}
-
-        {activeView === 'minimal-pairs' && (
-          <MinimalPairsView
-            onOpenWord={handleOpenWordById}
-            onLookupWord={(word) => {
-              setQuery(word);
-              void handleDictionaryLookup(word);
-            }}
-          />
-        )}
 
         {activeView === 'saved' && (
           <SavedWordsView

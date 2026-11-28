@@ -2,11 +2,10 @@ import { Shuffle } from 'lucide-react';
 
 export type AppView =
   | 'dictionary'
+  | 'en-to-de'
   | 'nearby'
   | 'sentences'
   | 'a1-certificate'
-  | 'sound-guide'
-  | 'minimal-pairs'
   | 'saved';
 
 interface HeaderProps {
@@ -19,11 +18,10 @@ interface HeaderProps {
 export function Header({ activeView, savedCount, onNavigate, onRandomWord }: HeaderProps) {
   const navItems: { id: AppView; label: string }[] = [
     { id: 'dictionary', label: 'Dictionary' },
+    { id: 'en-to-de', label: 'English → German' },
     { id: 'nearby', label: 'Nearby' },
     { id: 'sentences', label: 'Sentences' },
     { id: 'a1-certificate', label: 'A1 Certificate' },
-    { id: 'sound-guide', label: 'Sound Guide' },
-    { id: 'minimal-pairs', label: 'Minimal Pairs' },
     { id: 'saved', label: savedCount > 0 ? `Revision (${savedCount})` : 'Revision' },
   ];
 

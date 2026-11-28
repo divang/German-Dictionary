@@ -3,6 +3,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import type { CollocationItem, DictionaryEntry, DictionarySuggestion } from '../src/types/dictionary';
+import type { EnglishSuggestItem } from '../src/types/enToDe';
 import { normalizeGermanQuery, stripUmlautsSimple } from '../src/utils/dictionary';
 import {
   buildDeterministicGermanEntry,
@@ -29,6 +30,8 @@ class GermanLexiconIndex {
   private prefixBuckets = new Map<string, number[]>();
   private exactMap = new Map<string, number>();
   private simpleExactMap = new Map<string, number>();
+  private englishExactMap = new Map<string, number[]>();
+  private englishPrefixBuckets = new Map<string, string[]>();
   private loaded = false;
   private loadingPromise: Promise<void> | null = null;
 
@@ -62,6 +65,8 @@ class GermanLexiconIndex {
         const buckets = new Map<string, number[]>();
         const exact = new Map<string, number>();
         const simpleExact = new Map<string, number>();
+        const engExact = new Map<string, number[]>();
+        const engPrefix = new Map<string, string[]>();
 
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
@@ -105,14 +110,55 @@ class GermanLexiconIndex {
             }
             b2.push(idx);
           }
+
+          // Reverse English gloss index for fast English -> German lookup & autocomplete
+          if (english && !word.includes(' ')) {
+            const glossPieces = english.split(/[;,]/);
+            for (let g = 0; g < Math.min(glossPieces.length, 4); g++) {
+              const cleanedGloss = glossPieces[g]
+                .replace(/\([^)]*\)/g, '')
+                .replace(/\[[^\]]*\]/g, '')
+                .trim()
+                .toLowerCase();
+              if (!cleanedGloss || cleanedGloss.length < 2 || cleanedGloss.length > 36) continue;
+
+              const glossKeys = [cleanedGloss];
+              if (cleanedGloss.startsWith('to ') && cleanedGloss.length > 5) {
+                glossKeys.push(cleanedGloss.slice(3).trim());
+              }
+
+              for (const gKey of glossKeys) {
+                if (!/^[a-z][a-z\s'-]*$/.test(gKey)) continue;
+                let list = engExact.get(gKey);
+                if (!list) {
+                  list = [];
+                  engExact.set(gKey, list);
+                  const pk = gKey.slice(0, 2);
+                  let pb = engPrefix.get(pk);
+                  if (!pb) {
+                    pb = [];
+                    engPrefix.set(pk, pb);
+                  }
+                  pb.push(gKey);
+                }
+                if (list.length < 18) {
+                  list.push(idx);
+                }
+              }
+            }
+          }
         }
 
         this.rows = rows;
         this.prefixBuckets = buckets;
         this.exactMap = exact;
         this.simpleExactMap = simpleExact;
+        this.englishExactMap = engExact;
+        this.englishPrefixBuckets = engPrefix;
         this.loaded = true;
-        console.log(`[lexicon] Indexed ${rows.length.toLocaleString()} German dictionary entries.`);
+        console.log(
+          `[lexicon] Indexed ${rows.length.toLocaleString()} German entries (${engExact.size.toLocaleString()} English gloss keys).`,
+        );
       } catch (err) {
         console.error('[lexicon] Failed loading dictionary:', err);
         this.loaded = true;
@@ -371,6 +417,99 @@ class GermanLexiconIndex {
       englishMeaning: 'Looked up via phonetic breakdown (click Enhance with AI Coach for full translation)',
       collocations,
     });
+  }
+
+  /**
+   * Fast English autocomplete suggestions backed by our 382k FreeDict corpus.
+   */
+  public suggestEnglish(rawQuery: string, limit = 8): EnglishSuggestItem[] {
+    const q = rawQuery.trim().toLowerCase();
+    if (q.length < 2) return [];
+
+    const qBare = q.startsWith('to ') ? q.slice(3).trim() : q;
+    const prefixKey = qBare.slice(0, 2);
+    const candidates = this.englishPrefixBuckets.get(prefixKey) ?? [];
+
+    const exactMatches: string[] = [];
+    const prefixMatches: string[] = [];
+
+    for (let i = 0; i < candidates.length; i++) {
+      const engKey = candidates[i];
+      if (engKey === q || engKey === qBare) {
+        exactMatches.push(engKey);
+      } else if (engKey.startsWith(qBare)) {
+        prefixMatches.push(engKey);
+      }
+      if (prefixMatches.length >= limit * 4) break;
+    }
+
+    prefixMatches.sort((a, b) => a.length - b.length || a.localeCompare(b));
+    const orderedKeys = [...exactMatches, ...prefixMatches].slice(0, limit);
+
+    const results: EnglishSuggestItem[] = [];
+    const seen = new Set<string>();
+    for (const engKey of orderedKeys) {
+      if (seen.has(engKey)) continue;
+      seen.add(engKey);
+      const rowIndices = this.englishExactMap.get(engKey);
+      if (!rowIndices || rowIndices.length === 0) continue;
+      const topRow = this.rows[rowIndices[0]];
+      if (!topRow) continue;
+      results.push({
+        english: engKey,
+        topGerman: topRow.word,
+        article: topRow.article,
+        devanagariPreview: transliterateGermanToDevanagari(topRow.word),
+      });
+    }
+    return results;
+  }
+
+  /**
+   * Fast reverse lookup: returns ranked German dictionary rows matching an English word or phrase.
+   */
+  public searchEnglishToGerman(rawQuery: string, limit = 12): RawLexiconRow[] {
+    const q = rawQuery.trim().toLowerCase();
+    if (q.length < 2) return [];
+
+    const qBare = q.startsWith('to ') ? q.slice(3).trim() : q;
+    const seenWords = new Set<string>();
+    const results: RawLexiconRow[] = [];
+
+    const pushRow = (row: RawLexiconRow | undefined) => {
+      if (!row) return;
+      const key = row.word.toLowerCase();
+      if (seenWords.has(key)) return;
+      seenWords.add(key);
+      results.push(row);
+    };
+
+    // 1. Exact English gloss matches (highest precision)
+    for (const key of [q, qBare, `to ${qBare}`]) {
+      const indices = this.englishExactMap.get(key);
+      if (indices) {
+        for (const idx of indices) {
+          pushRow(this.rows[idx]);
+          if (results.length >= limit) return results;
+        }
+      }
+    }
+
+    // 2. Prefix English gloss matches (e.g. "water bottle" or "bedroom")
+    const prefixKey = qBare.slice(0, 2);
+    const bucket = this.englishPrefixBuckets.get(prefixKey) ?? [];
+    for (let i = 0; i < bucket.length; i++) {
+      const engKey = bucket[i];
+      if (!engKey.startsWith(qBare)) continue;
+      const indices = this.englishExactMap.get(engKey);
+      if (!indices) continue;
+      for (const idx of indices.slice(0, 3)) {
+        pushRow(this.rows[idx]);
+        if (results.length >= limit) return results;
+      }
+    }
+
+    return results;
   }
 }
 

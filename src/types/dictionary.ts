@@ -59,6 +59,24 @@ export interface DictionarySuggestion {
   curatedId?: string;
 }
 
+export interface WordFormationPart {
+  german: string;
+  article?: 'der' | 'die' | 'das' | '';
+  genderLabel?: string;
+  meaning: string;
+  hindiMeaning?: string;
+  devanagari?: string;
+  role?: string;
+  speakable: boolean;
+}
+
+export interface WordFormation {
+  isCompoundOrDerived: boolean;
+  formulaText: string;
+  explanation: string;
+  parts: WordFormationPart[];
+}
+
 export interface DictionaryEntry {
   id: string;
   word: string;
@@ -77,6 +95,7 @@ export interface DictionaryEntry {
   example: ExampleSentence;
   examples?: ExampleSentence[];
   collocations?: CollocationItem[];
+  wordFormation?: WordFormation;
   matchedQuery?: string;
   source?: 'curated' | 'dictionary' | 'live';
 }

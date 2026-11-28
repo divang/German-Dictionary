@@ -1,19 +1,24 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import {
   ArrowUpRight,
   Bookmark,
   Check,
   Copy,
+  Layers,
   Loader2,
+  Plus,
   Turtle,
   Volume2,
   Wand2,
 } from 'lucide-react';
-import type { DictionaryEntry } from '../types/dictionary';
+import type { DictionaryEntry, WordFormation } from '../types/dictionary';
 import { getDifficultyMeta } from '../utils/dictionary';
 import { playGermanAudio } from '../utils/audioPlayer';
 import { resolveSyllableAudioTarget } from '../utils/voiceSelection';
+import { normalizeWordFormation } from '../utils/wordFormation';
 import { ArticulationDiagram } from './ArticulationDiagram';
+
+const clientWordFormationCache = new Map<string, WordFormation>();
 
 export type PlaybackSpeed = 'normal' | 'slow';
 
@@ -51,12 +56,70 @@ export function PronunciationEntryView({
   const [audioNotice, setAudioNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const formationCacheKey = `${(entry.article ?? '').toLowerCase()}::${entry.word.toLowerCase()}`;
+  const [wordFormation, setWordFormation] = useState<WordFormation | null>(
+    () => entry.wordFormation ?? clientWordFormationCache.get(formationCacheKey) ?? null,
+  );
+  const [isLoadingFormation, setIsLoadingFormation] = useState(false);
+
   useEffect(() => {
     const trickyIdx = entry.syllables.findIndex((s) => s.difficulty === 'new-sound');
     setSelectedSyllableIdx(trickyIdx >= 0 ? trickyIdx : 0);
     setAudioNotice(null);
     setCopied(false);
   }, [entry.id, entry.syllables]);
+
+  useEffect(() => {
+    if (entry.wordFormation) {
+      clientWordFormationCache.set(formationCacheKey, entry.wordFormation);
+      setWordFormation(entry.wordFormation);
+      setIsLoadingFormation(false);
+      return;
+    }
+
+    const cached = clientWordFormationCache.get(formationCacheKey);
+    if (cached) {
+      setWordFormation(cached);
+      setIsLoadingFormation(false);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    setWordFormation(null);
+    setIsLoadingFormation(true);
+
+    fetch('/api/word-formation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        word: entry.word,
+        article: entry.article ?? '',
+        englishMeaning: entry.englishMeaning,
+      }),
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { formation?: Partial<WordFormation> } | null) => {
+        if (cancelled) return;
+        if (data?.formation) {
+          const normalized = normalizeWordFormation(data.formation, entry.word);
+          clientWordFormationCache.set(formationCacheKey, normalized);
+          setWordFormation(normalized);
+        }
+      })
+      .catch(() => {
+        // Non-blocking: rest of dictionary breakdown stays visible
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingFormation(false);
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [formationCacheKey, entry.word, entry.article, entry.englishMeaning, entry.wordFormation]);
 
   const activeSyllable = entry.syllables[selectedSyllableIdx] ?? entry.syllables[0];
   const sentenceList =
@@ -330,6 +393,164 @@ export function PronunciationEntryView({
           <p>{entry.originNote}</p>
         </div>
       </section>
+
+      {/* Word Formation / Compound Building Blocks with Inline Listen (keeps current word context) */}
+      {(isLoadingFormation || (wordFormation && wordFormation.parts.length > 0)) && (
+        <section
+          aria-labelledby="word-formation-heading"
+          className="mt-6 bg-blue-50/40 border border-blue-200/80 rounded-xl p-5 sm:p-6"
+        >
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-blue-700 shrink-0" aria-hidden="true" />
+              <h2
+                id="word-formation-heading"
+                className="font-display text-lg sm:text-xl font-semibold text-slate-900"
+              >
+                How This Word Is Formed
+              </h2>
+            </div>
+            <span className="text-xs text-slate-500">
+              Listen to each separated word right here without leaving “{entry.word}”
+            </span>
+          </div>
+
+          {isLoadingFormation && !wordFormation ? (
+            <div
+              role="status"
+              className="mt-3 flex items-center gap-2 text-xs font-medium text-blue-800"
+            >
+              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden="true" />
+              <span>Breaking down the root and compound words for “{entry.word}”…</span>
+            </div>
+          ) : (
+            wordFormation && (
+              <div className="mt-3.5 space-y-4">
+                {/* Concise Formula Summary Line */}
+                <p className="text-sm sm:text-[15px] leading-relaxed text-slate-800 bg-white border border-blue-100 rounded-lg px-4 py-2.5">
+                  <span className="font-semibold text-slate-900">
+                    {entry.article ? `${entry.article} ` : ''}
+                    {entry.word}
+                  </span>{' '}
+                  {entry.englishMeaning &&
+                    !entry.englishMeaning.toLowerCase().includes('looked up via phonetic') && (
+                      <span className="text-slate-500">({entry.englishMeaning})</span>
+                    )}
+                  <span className="text-slate-400 mx-1.5">:</span>
+                  <span className="font-medium text-blue-900">{wordFormation.formulaText}</span>
+                </p>
+
+                {/* Separated Building-Block Cards Joined by + with Inline Audio */}
+                <div className="flex flex-wrap items-stretch gap-2.5">
+                  {wordFormation.parts.map((part, partIdx) => {
+                    const partNormalKey = `part-n-${partIdx}-${part.german}`;
+                    const partSlowKey = `part-s-${partIdx}-${part.german}`;
+                    return (
+                      <Fragment key={`${part.german}-${partIdx}`}>
+                        {partIdx > 0 && (
+                          <div
+                            aria-hidden="true"
+                            className="flex items-center justify-center px-0.5 text-blue-700"
+                          >
+                            <Plus className="w-4 h-4" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-[210px] max-w-full sm:max-w-[320px] bg-white border border-slate-200 rounded-xl p-3.5 flex flex-col justify-between gap-2.5">
+                          <div>
+                            <div className="flex items-baseline justify-between gap-2">
+                              <div className="flex flex-wrap items-baseline gap-x-1.5">
+                                {part.article && (
+                                  <span className="text-xs font-normal text-slate-400">
+                                    {part.article}
+                                  </span>
+                                )}
+                                <span className="font-display text-lg font-semibold text-slate-900">
+                                  {part.german}
+                                </span>
+                              </div>
+                              {(part.genderLabel || part.role) && (
+                                <span className="text-[11px] font-medium text-slate-500 shrink-0">
+                                  {part.genderLabel || part.role}
+                                </span>
+                              )}
+                            </div>
+
+                            {part.devanagari && (
+                              <div className="mt-0.5 font-devanagari text-sm font-semibold text-blue-800">
+                                {part.devanagari}
+                              </div>
+                            )}
+
+                            <div className="mt-1.5 text-xs text-slate-700 leading-relaxed space-y-0.5">
+                              {part.meaning && (
+                                <div>
+                                  <span className="text-slate-400">Meaning: </span>
+                                  <span className="font-medium text-slate-800">
+                                    {part.meaning}
+                                  </span>
+                                </div>
+                              )}
+                              {part.hindiMeaning && (
+                                <div className="font-devanagari text-slate-700">
+                                  <span className="font-sans text-slate-400">हिंदी: </span>
+                                  {part.hindiMeaning}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {part.speakable && (
+                            <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                disabled={playingKey !== null}
+                                onClick={() =>
+                                  handlePlay(part.german, partNormalKey, false)
+                                }
+                                aria-label={`Listen to separated word ${part.german}`}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 min-h-[30px] text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-md cursor-pointer focus-visible:outline-2 focus-visible:outline-blue-700"
+                              >
+                                {playingKey === partNormalKey ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+                                ) : (
+                                  <Volume2 className="w-3 h-3" aria-hidden="true" />
+                                )}
+                                <span>Listen</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={playingKey !== null}
+                                onClick={() =>
+                                  handlePlay(part.german, partSlowKey, true)
+                                }
+                                aria-label={`Listen to separated word ${part.german} slowly`}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 min-h-[30px] text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-md cursor-pointer focus-visible:outline-2 focus-visible:outline-blue-700"
+                              >
+                                {playingKey === partSlowKey ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+                                ) : (
+                                  <Turtle className="w-3 h-3" aria-hidden="true" />
+                                )}
+                                <span>Slow</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </Fragment>
+                    );
+                  })}
+                </div>
+
+                {wordFormation.explanation && (
+                  <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+                    {wordFormation.explanation}
+                  </p>
+                )}
+              </div>
+            )
+          )}
+        </section>
+      )}
 
       {/* Linguee-Style Sample Sentences with Slow / Normal German Audio */}
       <section aria-labelledby="example-heading" className="mt-8">
