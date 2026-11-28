@@ -242,3 +242,115 @@ export function formatLessonNotebookExport(
 
   return lines.join('\n');
 }
+
+export type ExerciseDifficulty = 'standard' | 'challenge';
+
+/**
+ * Validates and normalizes newly generated exercise questions so every MCQ has
+ * 3–4 unique options containing the exact correctAnswer and every fill question
+ * has clean prompt, hint, acceptedAnswers, and explanation.
+ */
+export function normalizeGeneratedExercises(
+  rawList: unknown,
+  lessonId: string,
+  setNumber: number,
+): LessonExerciseQuestion[] {
+  if (!Array.isArray(rawList)) return [];
+
+  const safeLessonId = /^[a-zA-Z0-9_-]{1,64}$/.test(lessonId) ? lessonId : 'yt-a1';
+  const safeSet = Math.max(2, Math.min(999, Math.round(setNumber || 2)));
+  const cleaned: LessonExerciseQuestion[] = [];
+  const seenPrompts = new Set<string>();
+
+  for (const item of rawList) {
+    if (!item || typeof item !== 'object') continue;
+    const obj = item as Record<string, unknown>;
+
+    const type = obj.type === 'mcq' || obj.type === 'fill' ? obj.type : null;
+    const prompt = typeof obj.prompt === 'string' ? obj.prompt.trim().slice(0, 280) : '';
+    const correctAnswer =
+      typeof obj.correctAnswer === 'string' ? obj.correctAnswer.trim().slice(0, 120) : '';
+    const explanation =
+      typeof obj.explanation === 'string' ? obj.explanation.trim().slice(0, 360) : '';
+
+    if (!type || prompt.length < 8 || !correctAnswer || explanation.length < 6) {
+      continue;
+    }
+
+    const promptKey = normalizeGermanAnswer(prompt, false);
+    if (seenPrompts.has(promptKey)) continue;
+    seenPrompts.add(promptKey);
+
+    const hint =
+      typeof obj.hint === 'string' && obj.hint.trim().length > 0
+        ? obj.hint.trim().slice(0, 140)
+        : undefined;
+
+    if (type === 'mcq') {
+      const rawOptions = Array.isArray(obj.options)
+        ? obj.options
+            .filter((o): o is string => typeof o === 'string')
+            .map((o) => o.trim().slice(0, 120))
+            .filter(Boolean)
+        : [];
+
+      const uniqueOptions: string[] = [];
+      const seenOpts = new Set<string>();
+      for (const opt of rawOptions) {
+        const key = opt.toLowerCase();
+        if (!seenOpts.has(key)) {
+          seenOpts.add(key);
+          uniqueOptions.push(opt);
+        }
+      }
+
+      if (uniqueOptions.length < 3) continue;
+
+      let resolvedCorrect = correctAnswer;
+      const exactMatch = uniqueOptions.find(
+        (opt) => opt.toLowerCase() === correctAnswer.toLowerCase(),
+      );
+      if (exactMatch) {
+        resolvedCorrect = exactMatch;
+      } else {
+        uniqueOptions[uniqueOptions.length - 1] = correctAnswer;
+      }
+
+      cleaned.push({
+        id: `${safeLessonId}-gen${safeSet}-q${cleaned.length + 1}`,
+        type: 'mcq',
+        prompt,
+        ...(hint ? { hint } : {}),
+        options: uniqueOptions.slice(0, 4),
+        correctAnswer: resolvedCorrect,
+        explanation,
+      });
+    } else {
+      const acceptedAnswers = Array.isArray(obj.acceptedAnswers)
+        ? Array.from(
+            new Set(
+              obj.acceptedAnswers
+                .filter((a): a is string => typeof a === 'string')
+                .map((a) => a.trim().slice(0, 120))
+                .filter((a) => a.length > 0 && a.toLowerCase() !== correctAnswer.toLowerCase()),
+            ),
+          ).slice(0, 4)
+        : [];
+
+      cleaned.push({
+        id: `${safeLessonId}-gen${safeSet}-q${cleaned.length + 1}`,
+        type: 'fill',
+        prompt,
+        ...(hint ? { hint } : {}),
+        correctAnswer,
+        ...(acceptedAnswers.length > 0 ? { acceptedAnswers } : {}),
+        explanation,
+      });
+    }
+
+    if (cleaned.length >= 4) break;
+  }
+
+  return cleaned;
+}
+

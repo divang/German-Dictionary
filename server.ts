@@ -12,6 +12,7 @@ import {
   normalizePronunciationFeedback,
   sanitizeAudioMimeType,
 } from './src/utils/pronunciationCheck';
+import { normalizeGeneratedExercises } from './src/utils/youtubeCourse';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1825,6 +1826,215 @@ async function startServer() {
     console.error('[api/a1/grade-writing] Error:', lastErr instanceof Error ? lastErr.message : String(lastErr));
     res.status(502).json({
       error: 'Could not reach the AI Writing Coach right now. Compare your draft with the model answer below or retry in a moment.',
+    });
+  });
+
+  const REGENERATE_EXERCISES_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+      exercises: {
+        type: Type.ARRAY,
+        description: 'Exactly 4 brand-new German A1 exercises (2 mcq and 2 fill) tailored to this lesson.',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            type: {
+              type: Type.STRING,
+              description: 'Strictly either "mcq" or "fill".',
+            },
+            prompt: {
+              type: Type.STRING,
+              description: 'Clear question prompt in English with German blanks or examples.',
+            },
+            hint: {
+              type: Type.STRING,
+              description: 'Optional brief hint (especially helpful for fill-in-the-blank). Empty string if not needed.',
+            },
+            options: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: 'For type "mcq", exactly 4 distinct answer choices including the exact correctAnswer. For type "fill", empty array.',
+            },
+            correctAnswer: {
+              type: Type.STRING,
+              description: 'The exact correct answer string (must match one of options verbatim when type is "mcq").',
+            },
+            acceptedAnswers: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: 'For type "fill", optional alternative acceptable German answers (e.g. with or without article). Empty array if none.',
+            },
+            explanation: {
+              type: Type.STRING,
+              description: 'Concise 1-2 sentence explanation of why the answer is right, optionally including a quick Hindi tip.',
+            },
+          },
+          required: ['type', 'prompt', 'correctAnswer', 'explanation'],
+        },
+      },
+    },
+    required: ['exercises'],
+  };
+
+  app.post('/api/youtube-a1/regenerate-exercises', async (req, res) => {
+    const body = (req.body ?? {}) as {
+      lessonId?: unknown;
+      lessonNumber?: unknown;
+      shortTitle?: unknown;
+      germanTopic?: unknown;
+      summary?: unknown;
+      keyFormula?: unknown;
+      notes?: unknown;
+      vocabulary?: unknown;
+      previousPrompts?: unknown;
+      difficulty?: unknown;
+      setNumber?: unknown;
+    };
+
+    const lessonId = typeof body.lessonId === 'string' ? body.lessonId.trim().slice(0, 64) : 'yt-a1';
+    const lessonNumber = Math.max(1, Math.min(100, Math.round(Number(body.lessonNumber) || 1)));
+    const shortTitle = typeof body.shortTitle === 'string' ? body.shortTitle.trim().slice(0, 140) : '';
+    const germanTopic = typeof body.germanTopic === 'string' ? body.germanTopic.trim().slice(0, 140) : '';
+    const summary = typeof body.summary === 'string' ? body.summary.trim().slice(0, 320) : '';
+    const keyFormula = typeof body.keyFormula === 'string' ? body.keyFormula.trim().slice(0, 260) : '';
+    const difficulty = body.difficulty === 'challenge' ? 'challenge' : 'standard';
+    const setNumber = Math.max(2, Math.min(999, Math.round(Number(body.setNumber) || 2)));
+
+    if (!shortTitle || !germanTopic) {
+      res.status(400).json({ error: 'Lesson topic is required to generate new exercises.' });
+      return;
+    }
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error: 'Gemini API key is not configured on the server. Please check Settings > Secrets.',
+      });
+      return;
+    }
+
+    const notesText = Array.isArray(body.notes)
+      ? body.notes
+          .slice(0, 5)
+          .map((n) => {
+            if (!n || typeof n !== 'object') return '';
+            const rec = n as Record<string, unknown>;
+            return `- ${String(rec.heading || '').slice(0, 100)}: ${String(rec.explanation || '').slice(0, 260)}`;
+          })
+          .filter(Boolean)
+          .join('\n')
+      : '';
+
+    const vocabText = Array.isArray(body.vocabulary)
+      ? body.vocabulary
+          .slice(0, 10)
+          .map((v) => {
+            if (!v || typeof v !== 'object') return '';
+            const rec = v as Record<string, unknown>;
+            return `- ${String(rec.german || '').slice(0, 80)} = ${String(rec.english || '').slice(0, 80)} (${String(rec.hindi || '').slice(0, 80)})`;
+          })
+          .filter(Boolean)
+          .join('\n')
+      : '';
+
+    const avoidPrompts = Array.isArray(body.previousPrompts)
+      ? body.previousPrompts
+          .filter((p): p is string => typeof p === 'string')
+          .map((p) => p.trim().slice(0, 220))
+          .filter(Boolean)
+          .slice(0, 16)
+      : [];
+
+    const difficultyNote =
+      difficulty === 'challenge'
+        ? 'Difficulty: Challenge A1 — test trickier edge cases, real-life mini-sentences, gender/case traps, and verb position from this lesson (still strictly CEFR A1).'
+        : 'Difficulty: Standard A1 — clear, beginner-friendly questions reinforcing the core rule, formula, and everyday phrases from this lesson.';
+
+    const promptContent = [
+      `Create 4 BRAND-NEW German A1 practice exercises for Learn German YouTube Lesson ${lessonNumber}: "${shortTitle}" (${germanTopic}).`,
+      summary ? `Lesson Summary: ${summary}` : '',
+      keyFormula ? `Key Formula: ${keyFormula}` : '',
+      notesText ? `Lesson Grammar Notes:\n${notesText}` : '',
+      vocabText ? `Lesson Vocabulary:\n${vocabText}` : '',
+      difficultyNote,
+      `Requirements:
+- Return exactly 4 questions in this order: 2 multiple-choice ("mcq") followed by 2 fill-in-the-blank ("fill").
+- Every MCQ must have 4 plausible, distinct options and correctAnswer MUST match one option verbatim.
+- Every fill-in-the-blank must have a single clear German word or short 2-word answer, a helpful hint, and realistic acceptedAnswers if minor variants exist.
+- Explanations must be 1–2 crisp sentences explaining the grammar/vocabulary rule clearly for Hindi-speaking beginners.`,
+      avoidPrompts.length > 0
+        ? `DO NOT repeat or closely paraphrase any of these already-used questions:\n${avoidPrompts.map((p, i) => `${i + 1}. ${p}`).join('\n')}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    const attempts: { model: string; useThinking: boolean; waitBeforeMs: number }[] = [
+      { model: 'gemini-4-hydrogen', useThinking: true, waitBeforeMs: 0 },
+      { model: 'gemini-3.1-flash-lite', useThinking: false, waitBeforeMs: 250 },
+      { model: 'gemini-3.1-flash-lite', useThinking: false, waitBeforeMs: 1200 },
+    ];
+
+    const systemInstruction =
+      'You are a Goethe-Zertifikat A1 German teacher creating fresh, accurate, non-repetitive exercises for Hindi-speaking beginners. Output strictly valid JSON matching the requested schema.';
+
+    let lastErr: unknown;
+    for (const attempt of attempts) {
+      if (attempt.waitBeforeMs > 0) await delay(attempt.waitBeforeMs);
+      try {
+        const config = attempt.useThinking
+          ? {
+              systemInstruction,
+              responseMimeType: 'application/json',
+              responseSchema: REGENERATE_EXERCISES_SCHEMA,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            }
+          : {
+              systemInstruction,
+              responseMimeType: 'application/json',
+              responseSchema: REGENERATE_EXERCISES_SCHEMA,
+            };
+
+        const response = await ai.models.generateContent({
+          model: attempt.model,
+          contents: promptContent,
+          config,
+        });
+
+        const rawText = (response.text ?? '').trim();
+        if (!rawText) continue;
+        const parsed = JSON.parse(rawText) as { exercises?: unknown };
+        const normalized = normalizeGeneratedExercises(parsed.exercises, lessonId, setNumber);
+
+        if (normalized.length >= 3) {
+          res.json({
+            exercises: normalized,
+            setNumber,
+            difficulty,
+          });
+          return;
+        }
+      } catch (err) {
+        lastErr = err;
+        const errMsg = err instanceof Error ? err.message : String(err ?? '');
+        if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('PERMISSION_DENIED')) {
+          break;
+        }
+      }
+    }
+
+    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr ?? '');
+    console.error('[api/youtube-a1/regenerate-exercises] Error:', msg);
+
+    if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+      res.status(429).json({
+        error: 'Exercise generator is temporarily rate-limited. Please wait a moment and try again.',
+      });
+      return;
+    }
+
+    res.status(502).json({
+      error: 'Could not generate a fresh exercise set right now. Please try again in a moment.',
     });
   });
 

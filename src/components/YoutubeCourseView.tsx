@@ -20,10 +20,12 @@ import {
   LogOut,
   MessageSquare,
   Play,
+  RefreshCw,
   RotateCcw,
   Save,
   Search,
   Shuffle,
+  Sparkles,
   Turtle,
   Volume2,
   X,
@@ -36,6 +38,7 @@ import {
   YOUTUBE_COURSE_STAGES,
 } from '../data/youtubeA1';
 import type {
+  LessonExerciseQuestion,
   LessonQuizSummary,
   YoutubeA1Lesson,
   YoutubeCourseStageId,
@@ -51,6 +54,8 @@ import {
   filterYoutubeLessons,
   formatLessonNotebookExport,
   gradeLessonExercises,
+  normalizeGeneratedExercises,
+  type ExerciseDifficulty,
   type YoutubeLessonFilterMode,
 } from '../utils/youtubeCourse';
 
@@ -117,14 +122,31 @@ export function YoutubeCourseView({
   const [cardOrder, setCardOrder] = useState<number[]>([]);
   const [practiceLoggedToast, setPracticeLoggedToast] = useState(false);
 
-  // Exercise quiz state
+  // Exercise quiz & on-demand regeneration state
   const [quizAnswers, setQuizAnswers] = useState<Record<string, string>>({});
   const [quizSummary, setQuizSummary] = useState<LessonQuizSummary | null>(null);
+  const [exerciseDifficulty, setExerciseDifficulty] = useState<ExerciseDifficulty>('standard');
+  const [customExerciseSets, setCustomExerciseSets] = useState<
+    Record<
+      string,
+      {
+        setNumber: number;
+        difficulty: ExerciseDifficulty;
+        questions: LessonExerciseQuestion[];
+        seenPrompts: string[];
+      }
+    >
+  >({});
+  const [isRegeneratingExercises, setIsRegeneratingExercises] = useState(false);
+  const [regenError, setRegenError] = useState<string | null>(null);
 
   const activeLesson = useMemo(
     () => YOUTUBE_A1_LESSONS.find((l) => l.id === selectedLessonId) ?? YOUTUBE_A1_LESSONS[0],
     [selectedLessonId],
   );
+
+  const customExerciseSet = customExerciseSets[activeLesson.id] ?? null;
+  const activeExercises = customExerciseSet?.questions ?? activeLesson.exercises;
 
   const activeLessonIndex = useMemo(
     () => YOUTUBE_A1_LESSONS.findIndex((l) => l.id === activeLesson.id),
@@ -196,6 +218,7 @@ export function YoutubeCourseView({
     setPracticeLoggedToast(false);
     setQuizAnswers({});
     setQuizSummary(null);
+    setRegenError(null);
     setCardIndex(0);
     setCardFlipped(false);
     setCardOrder(activeLesson.vocabulary.map((_, i) => i));
@@ -328,7 +351,7 @@ export function YoutubeCourseView({
   };
 
   const handleCheckExercises = () => {
-    const graded = gradeLessonExercises(activeLesson.exercises, quizAnswers);
+    const graded = gradeLessonExercises(activeExercises, quizAnswers);
     setQuizSummary(graded);
 
     const prevBest = activeProgress?.bestExerciseScore ?? 0;
@@ -342,6 +365,103 @@ export function YoutubeCourseView({
   const handleResetExercises = () => {
     setQuizAnswers({});
     setQuizSummary(null);
+  };
+
+  const handleRestoreDefaultExercises = () => {
+    setCustomExerciseSets((prev) => {
+      const next = { ...prev };
+      delete next[activeLesson.id];
+      return next;
+    });
+    setQuizAnswers({});
+    setQuizSummary(null);
+    setRegenError(null);
+  };
+
+  const handleRegenerateExercises = async (overrideDifficulty?: ExerciseDifficulty) => {
+    const targetDifficulty = overrideDifficulty ?? exerciseDifficulty;
+    if (overrideDifficulty) {
+      setExerciseDifficulty(overrideDifficulty);
+    }
+
+    const lessonAtStart = activeLesson;
+    const prevCustom = customExerciseSets[lessonAtStart.id];
+    const nextSetNumber = (prevCustom?.setNumber ?? 1) + 1;
+    const previousPrompts = Array.from(
+      new Set([
+        ...lessonAtStart.exercises.map((q) => q.prompt),
+        ...(prevCustom?.seenPrompts ?? []),
+      ]),
+    ).slice(-16);
+
+    setIsRegeneratingExercises(true);
+    setRegenError(null);
+
+    try {
+      const response = await fetch('/api/youtube-a1/regenerate-exercises', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lessonId: lessonAtStart.id,
+          lessonNumber: lessonAtStart.lessonNumber,
+          shortTitle: lessonAtStart.shortTitle,
+          germanTopic: lessonAtStart.germanTopic,
+          summary: lessonAtStart.summary,
+          keyFormula: lessonAtStart.keyFormula,
+          notes: lessonAtStart.notes.map((n) => ({
+            heading: n.heading,
+            explanation: n.explanation,
+          })),
+          vocabulary: lessonAtStart.vocabulary.map((v) => ({
+            german: v.german,
+            english: v.english,
+            hindi: v.hindi,
+          })),
+          previousPrompts,
+          difficulty: targetDifficulty,
+          setNumber: nextSetNumber,
+        }),
+      });
+
+      const payload = (await response.json()) as {
+        exercises?: unknown;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        setRegenError(
+          payload.error || 'Could not generate fresh exercises right now. Please try again.',
+        );
+        return;
+      }
+
+      const freshQuestions = normalizeGeneratedExercises(
+        payload.exercises,
+        lessonAtStart.id,
+        nextSetNumber,
+      );
+
+      if (freshQuestions.length < 3) {
+        setRegenError('Received an incomplete exercise set. Please tap Regenerate again.');
+        return;
+      }
+
+      setCustomExerciseSets((prev) => ({
+        ...prev,
+        [lessonAtStart.id]: {
+          setNumber: nextSetNumber,
+          difficulty: targetDifficulty,
+          questions: freshQuestions,
+          seenPrompts: [...previousPrompts, ...freshQuestions.map((q) => q.prompt)].slice(-20),
+        },
+      }));
+      setQuizAnswers({});
+      setQuizSummary(null);
+    } catch {
+      setRegenError('Network error while generating fresh exercises. Your current set is still ready.');
+    } finally {
+      setIsRegeneratingExercises(false);
+    }
   };
 
   const currentVocabIndex = cardOrder[cardIndex] ?? 0;
@@ -1383,23 +1503,125 @@ export function YoutubeCourseView({
           {/* TAB 3: GRADED EXERCISES */}
           {activeTab === 'exercises' && (
             <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-display text-lg font-semibold text-slate-900">
-                    Lesson {activeLesson.lessonNumber} Exercises ({activeLesson.exercises.length}{' '}
-                    Questions)
-                  </h3>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-display text-lg font-semibold text-slate-900">
+                      Lesson {activeLesson.lessonNumber} Exercises ({activeExercises.length}{' '}
+                      Questions)
+                    </h3>
+                    {customExerciseSet && (
+                      <span className="text-[11px] font-semibold text-blue-800 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md">
+                        Fresh Set #{customExerciseSet.setNumber} ·{' '}
+                        {customExerciseSet.difficulty === 'challenge'
+                          ? 'Challenge A1'
+                          : 'Standard A1'}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Mix of multiple choice and fill-in-the-blank. Score 60% or higher to pass and
-                    auto-mark this lesson complete.
+                    Mix of multiple choice and fill-in-the-blank. Score 60% or higher to pass — or
+                    regenerate brand-new questions anytime for extra practice.
                   </p>
                 </div>
-                {bestScore > 0 && (
-                  <span className="text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg tabular-nums">
-                    Best Score: {bestScore}%
-                  </span>
-                )}
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {bestScore > 0 && (
+                    <span className="text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 rounded-lg tabular-nums">
+                      Best Score: {bestScore}%
+                    </span>
+                  )}
+                </div>
               </div>
+
+              {/* Regenerate Fresh Exercises Toolbar */}
+              <div className="bg-slate-50 border border-slate-200/90 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-slate-600">Level:</span>
+                  <div
+                    role="group"
+                    aria-label="Exercise difficulty"
+                    className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5"
+                  >
+                    {(
+                      [
+                        { id: 'standard', label: 'Standard A1' },
+                        { id: 'challenge', label: 'Challenge A1' },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        disabled={isRegeneratingExercises}
+                        onClick={() => setExerciseDifficulty(opt.id)}
+                        aria-pressed={exerciseDifficulty === opt.id}
+                        className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer disabled:opacity-50 ${
+                          exerciseDifficulty === opt.id
+                            ? 'bg-slate-900 text-white'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {customExerciseSet && (
+                    <button
+                      type="button"
+                      disabled={isRegeneratingExercises}
+                      onClick={handleRestoreDefaultExercises}
+                      className="px-2.5 py-1.5 min-h-[34px] text-xs font-medium text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer disabled:opacity-50"
+                    >
+                      Default Set
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={isRegeneratingExercises}
+                    onClick={() => void handleRegenerateExercises()}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 min-h-[34px] text-xs font-semibold text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors cursor-pointer disabled:opacity-60"
+                  >
+                    {isRegeneratingExercises ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                        <span>Generating New Questions…</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Regenerate Exercises</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {regenError && (
+                <div
+                  role="alert"
+                  className="rounded-xl p-3.5 bg-amber-50 border border-amber-200 text-xs sm:text-sm text-amber-950 flex items-start justify-between gap-3"
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle
+                      className="w-4 h-4 text-amber-700 shrink-0 mt-0.5"
+                      aria-hidden="true"
+                    />
+                    <span>{regenError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRegenError(null)}
+                    aria-label="Dismiss notice"
+                    className="text-amber-700 hover:text-amber-950 cursor-pointer shrink-0"
+                  >
+                    <X className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                </div>
+              )}
 
               {/* Graded Result Summary Banner */}
               {quizSummary && (
@@ -1419,11 +1641,11 @@ export function YoutubeCourseView({
                     </p>
                     <p className="text-xs mt-0.5 opacity-90">
                       {quizSummary.passed
-                        ? 'Great work! This lesson is marked complete in your A1 notebook.'
-                        : 'Review the explanations below and try again to hit 60% or higher.'}
+                        ? 'Great work! This lesson is marked complete. Regenerate fresh questions anytime for extra drill.'
+                        : 'Review the explanations below, retry this set, or generate fresh questions to practice more.'}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <button
                       type="button"
                       onClick={handleResetExercises}
@@ -1431,6 +1653,18 @@ export function YoutubeCourseView({
                     >
                       <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
                       Try Again
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isRegeneratingExercises}
+                      onClick={() => void handleRegenerateExercises()}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white text-blue-800 border border-blue-200 hover:bg-blue-50 rounded-lg cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${isRegeneratingExercises ? 'animate-spin' : ''}`}
+                        aria-hidden="true"
+                      />
+                      New Set
                     </button>
                     {nextLesson && (
                       <button
@@ -1451,7 +1685,7 @@ export function YoutubeCourseView({
 
               {/* Question Cards */}
               <div className="space-y-4">
-                {activeLesson.exercises.map((q, idx) => {
+                {activeExercises.map((q, idx) => {
                   const userVal = quizAnswers[q.id] ?? '';
                   const gradedItem = quizSummary?.results.find((r) => r.questionId === q.id);
 

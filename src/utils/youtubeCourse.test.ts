@@ -16,6 +16,7 @@ import {
   gradeLessonExercises,
   isExerciseAnswerCorrect,
   mergeYoutubeProgressMaps,
+  normalizeGeneratedExercises,
   normalizeGermanAnswer,
   sanitizeLessonProgressRecord,
 } from './youtubeCourse';
@@ -207,3 +208,45 @@ test('formatLessonNotebookExport includes lesson summary, notes, vocabulary, dia
   assert.ok(exported.includes('MY PERSONAL NOTES:'));
   assert.ok(exported.includes('Review Tschüss vs Auf Wiedersehen'));
 });
+
+test('normalizeGeneratedExercises sanitizes AI questions, enforces MCQ option integrity, and assigns unique set IDs', () => {
+  const normalized = normalizeGeneratedExercises(
+    [
+      {
+        type: 'mcq',
+        prompt: 'Which German greeting is best at 8:00 AM?',
+        options: ['Guten Morgen', 'Guten Abend', 'Gute Nacht', 'Guten Morgen'],
+        correctAnswer: 'guten morgen',
+        explanation: 'Use Guten Morgen in the morning until around 11 AM.',
+      },
+      {
+        type: 'mcq',
+        prompt: 'Broken MCQ with only 1 option should be skipped',
+        options: ['Only one'],
+        correctAnswer: 'Only one',
+        explanation: 'Invalid question.',
+      },
+      {
+        type: 'fill',
+        prompt: 'Complete the formal goodbye: Auf ____!',
+        hint: 'Means "see again"',
+        correctAnswer: 'Wiedersehen',
+        acceptedAnswers: ['wiedersehen', 'Wiedersehen!'],
+        explanation: 'Auf Wiedersehen is the polite formal goodbye.',
+      },
+    ],
+    'yt-a1-01',
+    3,
+  );
+
+  assert.equal(normalized.length, 2);
+  assert.equal(normalized[0].id, 'yt-a1-01-gen3-q1');
+  assert.equal(normalized[0].correctAnswer, 'Guten Morgen');
+  assert.deepEqual(normalized[0].options, ['Guten Morgen', 'Guten Abend', 'Gute Nacht']);
+  assert.equal(isExerciseAnswerCorrect(normalized[0], 'Guten Morgen'), true);
+
+  assert.equal(normalized[1].id, 'yt-a1-01-gen3-q2');
+  assert.equal(normalized[1].type, 'fill');
+  assert.equal(isExerciseAnswerCorrect(normalized[1], 'Wiedersehen'), true);
+});
+
