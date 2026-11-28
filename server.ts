@@ -884,7 +884,7 @@ async function startServer() {
       accuracyScore: {
         type: Type.INTEGER,
         description:
-          'Honest German pronunciation accuracy score from 0 to 100 based strictly on the recorded audio. 0-35 if silent/unintelligible/wrong word, 36-49 if major errors make it hard to recognize, 50-69 if understandable with clear pronunciation mistakes, 70-84 if good with minor accent/vowel tweaks, 85-100 if clear accurate German.',
+          'Calibrated, honest German pronunciation accuracy score from 0 to 100 based strictly on the recorded audio. 0-30 ONLY if silent, noise-only, English/Hindi instead of German, or completely wrong word. 35-49 if the target word is barely recognizable. 50-69 if the target word is recognizable and some syllables/chunks are clear while 1-2 specific sounds (like ö/ü/r/ch/eu) need fixing. 70-84 if clearly understandable German with minor accent/vowel polish needed. 85-100 if clear, accurate Standard German.',
       },
       heardText: {
         type: Type.STRING,
@@ -898,27 +898,135 @@ async function startServer() {
       },
       summaryEnglish: {
         type: Type.STRING,
-        description: '1 to 2 clear, encouraging English sentences summarizing pronunciation accuracy.',
+        description:
+          '1 to 2 warm, specific human-teacher sentences explaining what worked and what exact part needs focus.',
       },
       summaryHindi: {
         type: Type.STRING,
-        description: '1 to 2 natural Hindi sentences (in Devanagari) summarizing the pronunciation rating.',
+        description:
+          '1 to 2 natural Hindi sentences (in Devanagari) like an encouraging personal German tutor.',
       },
       strengths: {
         type: Type.ARRAY,
         items: { type: Type.STRING },
-        description: '1 to 3 specific sounds, syllables, or stress patterns the learner pronounced well.',
+        description: '1 to 3 specific sounds, syllables, or chunks the learner got right.',
+      },
+      wordBreakdown: {
+        type: Type.ARRAY,
+        description:
+          'Ordered sound-by-sound breakdown of the target German word into prefix, infix, root, or suffix chunks (or individual words for a multi-word sentence) so the learner sees EXACTLY which piece was right vs. which piece failed.',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            chunk: {
+              type: Type.STRING,
+              description:
+                'The exact piece with hyphens showing position, e.g. "Fri-", "-s-", "-eu-", "-r" or "ent-", "-schul-", "-di-", "-gung".',
+            },
+            speakText: {
+              type: Type.STRING,
+              description:
+                'Clean pronounceable German text for practicing this piece aloud (e.g. "Fri", "sö", "Friseur").',
+            },
+            role: {
+              type: Type.STRING,
+              description:
+                'Must be one of: "prefix", "root", "infix", "suffix", "syllable", or "word".',
+            },
+            status: {
+              type: Type.STRING,
+              description:
+                'Must be one of: "correct" (score >= 78), "close" (score 55-77), or "needs-work" (score < 55).',
+            },
+            score: {
+              type: Type.INTEGER,
+              description: 'Accuracy score 0-100 for this specific prefix/infix/suffix chunk.',
+            },
+            targetDevanagari: {
+              type: Type.STRING,
+              description: 'Target sound of this chunk in Devanagari (e.g. "फ़्री", "ज़", "यॉ / ओ", "अ").',
+            },
+            heardAs: {
+              type: Type.STRING,
+              description: 'What this specific chunk sounded like in the user audio (e.g. "oo / उ" or "clear").',
+            },
+            teacherHint: {
+              type: Type.STRING,
+              description: 'Short, concrete lip/tongue/airflow coaching cue for this exact chunk.',
+            },
+            hindiCoachCue: {
+              type: Type.STRING,
+              description: 'Practical Hindi mouth/sound coaching cue for this chunk.',
+            },
+            spellOutCue: {
+              type: Type.STRING,
+              description:
+                'If the learner cannot pick up this sound, an ultra-simple phonetic spell-out trick (e.g. "Make lips like ओ, freeze them, and say ए -> zö / ज़्यो").',
+            },
+          },
+          required: [
+            'chunk',
+            'speakText',
+            'role',
+            'status',
+            'score',
+            'targetDevanagari',
+            'heardAs',
+            'teacherHint',
+            'hindiCoachCue',
+            'spellOutCue',
+          ],
+        },
+      },
+      teacherGuidance: {
+        type: Type.OBJECT,
+        description:
+          'Human-teacher coaching decision: tells the learner whether to pause the full word and drill a single tricky prefix/infix/suffix step-by-step, with an explicit spell-sound breakdown.',
+        properties: {
+          shouldBreakDown: {
+            type: Type.BOOLEAN,
+            description:
+              'True when accuracyScore < 75 or the learner is retrying and should drill one specific chunk first.',
+          },
+          teacherMessage: {
+            type: Type.STRING,
+            description:
+              'Warm, human-teacher guidance acknowledging attempt count/progress and telling them the exact single chunk to focus on next.',
+          },
+          teacherMessageHindi: {
+            type: Type.STRING,
+            description: 'Same warm teacher direction in natural Hindi (Devanagari).',
+          },
+          recommendedChunkIndex: {
+            type: Type.INTEGER,
+            description:
+              '0-based index into wordBreakdown pointing to the SINGLE trickiest prefix/infix/suffix to drill first.',
+          },
+          spellingPrompt: {
+            type: Type.STRING,
+            description:
+              'Explicit phonetic spell-sound formula showing how to say each prefix/infix/suffix in sequence (e.g. "Fri (फ़्री) + s (ज़) + eu (यॉ/ओ) + r (अ)").',
+          },
+        },
+        required: [
+          'shouldBreakDown',
+          'teacherMessage',
+          'teacherMessageHindi',
+          'recommendedChunkIndex',
+          'spellingPrompt',
+        ],
       },
       corrections: {
         type: Type.ARRAY,
         description:
-          'Up to 4 specific sound-by-sound corrections for mistakes heard in the audio (empty array only if accuracyScore >= 94).',
+          'Up to 3 specific sound-by-sound corrections for mistakes heard in the audio (empty array only if accuracyScore >= 92).',
         items: {
           type: Type.OBJECT,
           properties: {
             segment: {
               type: Type.STRING,
-              description: 'The German letter, syllable, or word segment to improve (e.g. "eu / ö", "ch", "r", "ie", "stress").',
+              description:
+                'The German prefix, infix, suffix, or letter segment to improve (e.g. "Infix -eu- (ö)", "Suffix -r", "Prefix Fri-").',
             },
             issue: {
               type: Type.STRING,
@@ -948,6 +1056,8 @@ async function startServer() {
       'summaryEnglish',
       'summaryHindi',
       'strengths',
+      'wordBreakdown',
+      'teacherGuidance',
       'corrections',
       'retryTip',
     ],
@@ -963,6 +1073,27 @@ async function startServer() {
       typeof req.body?.devanagariHint === 'string' ? req.body.devanagariHint.trim().slice(0, 220) : '';
     const ipaHint =
       typeof req.body?.ipaHint === 'string' ? req.body.ipaHint.trim().slice(0, 120) : '';
+    const attemptNumber =
+      typeof req.body?.attemptNumber === 'number' && Number.isFinite(req.body.attemptNumber)
+        ? Math.max(1, Math.min(20, Math.floor(req.body.attemptNumber)))
+        : 1;
+    const previousScores: number[] = Array.isArray(req.body?.previousScores)
+      ? req.body.previousScores
+          .filter((n: unknown): n is number => typeof n === 'number' && Number.isFinite(n))
+          .slice(0, 6)
+      : [];
+    const previousWeakSegments: string[] = Array.isArray(req.body?.previousWeakSegments)
+      ? req.body.previousWeakSegments
+          .filter((s: unknown): s is string => typeof s === 'string' && s.trim().length > 0)
+          .map((s: string) => s.trim().slice(0, 40))
+          .slice(0, 5)
+      : [];
+    const focusChunk =
+      typeof req.body?.focusChunk === 'string' ? req.body.focusChunk.trim().slice(0, 60) : '';
+    const parentTarget =
+      typeof req.body?.parentTarget === 'string' ? req.body.parentTarget.trim().slice(0, 220) : '';
+    const chunkRole =
+      typeof req.body?.chunkRole === 'string' ? req.body.chunkRole.trim().slice(0, 30) : '';
 
     if (!targetText) {
       res.status(400).json({ error: 'Missing target German word or sentence to check.' });
@@ -989,16 +1120,28 @@ async function startServer() {
     }
 
     const mimeType = sanitizeAudioMimeType(rawMime);
+    const isChunkDrill = Boolean(focusChunk);
+
     const evalPrompt = [
-      'You are a strict yet encouraging Standard German (Hochdeutsch) phonetics coach evaluating a native Hindi speaker.',
-      `Target German to pronounce: "${targetText}"`,
+      'You are a patient, attentive, human Standard German (Hochdeutsch) phonetics teacher coaching a native Hindi speaker.',
+      isChunkDrill
+        ? `STEP-BY-STEP DRILL MODE: The learner is practicing ONLY the isolated ${chunkRole || 'sound'} chunk "${focusChunk}" (target audio/text: "${targetText}") from the full German word "${parentTarget || targetText}".`
+        : `FULL WORD / PHRASE MODE — Target German to pronounce: "${targetText}"`,
       devanagariHint ? `Reference Devanagari guide: ${devanagariHint}` : '',
       ipaHint ? `Reference IPA: ${ipaHint}` : '',
+      attemptNumber > 1
+        ? `Attempt context: This is Try #${attemptNumber}. Previous scores: [${previousScores.join('%, ')}%]. Earlier tricky parts: [${previousWeakSegments.join(', ') || 'none'}].`
+        : '',
       '',
-      'Listen carefully to the attached audio recording and evaluate how accurately the speaker pronounced the exact German target above:',
-      '- Be completely honest: if the audio is silent, noise-only, English/Hindi instead of German, or a completely different word, score 0–35 and state clearly what happened.',
-      '- Check vowel quality (especially umlauts ä / ö / ü, ie vs ei, eu/äu, long vs short vowels), consonants (ich-Laut /ç/ vs ach-Laut /x/, initial s=/z/, z=/ts/, v=/f/, w=/v/, sch=/ʃ/, uvular or vocalized r), word stress, and sentence rhythm.',
-      '- Give actionable mouth/tongue fixes tailored for Hindi speakers (e.g., rounding lips like ओ while saying ए for ö, or rounding lips like ऊ while saying ई for ü).',
+      'Evaluation rules (be honest AND fair like a real human teacher):',
+      '1. NEVER collapse an understandable beginner attempt to a flat 30%! Give genuine partial credit for each syllable/chunk that IS recognizable: if the start is clear and only 1 vowel/ending is off, score 55-74% (not 30%). Reserve 0-30% strictly for silence, background noise, English/Hindi speech, or a completely different word.',
+      isChunkDrill
+        ? `2. Because the learner is drilling ONLY the single chunk "${focusChunk}" (inside "${parentTarget || targetText}"), evaluate ONLY whether they produced that target chunk sound clearly (or said the short syllable cleanly). Do NOT penalize them for not saying the rest of "${parentTarget || targetText}"! If they hit the sound well enough to move on, score 75-95% and congratulate them.`
+        : '2. Break the target into 2 to 5 clear ordered chunks in `wordBreakdown` (prefix, infix, root, suffix — or individual words for a sentence). For example, for "Friseur" break into ["Fri-" (prefix), "-s-" (infix), "-eu-" (infix), "-r" (suffix)] and score EACH chunk individually so the learner immediately sees which exact letter/infix/suffix is green vs. amber vs. red!',
+      '3. For every chunk, write a super-practical `spellOutCue` so if the learner cannot pick up the sound by ear, they can literally spell/sound it out using Hindi mouth anchors (e.g. lips of ओ + tongue of ए for ö/eu in Friseur).',
+      attemptNumber >= 2
+        ? '4. The learner has tried multiple times! In `teacherGuidance`, acknowledge their persistence warmly, vary your coaching (do not repeat a robotic generic line), set `shouldBreakDown: true` if score < 78, point `recommendedChunkIndex` to the ONE single prefix/infix/suffix holding their score back, and give an explicit syllable-by-syllable `spellingPrompt`.'
+        : '4. In `teacherGuidance`, if score < 75 set `shouldBreakDown: true`, point `recommendedChunkIndex` to the single hardest prefix/infix/suffix, and provide a crystal-clear `spellingPrompt` combining all chunks with Devanagari.',
       '- Return ONLY valid JSON matching the schema.',
     ]
       .filter(Boolean)
@@ -1039,7 +1182,11 @@ async function startServer() {
         const rawText = (response.text ?? '').trim();
         if (rawText) {
           const parsed = JSON.parse(rawText) as Record<string, unknown>;
-          const feedback = normalizePronunciationFeedback(parsed, targetText);
+          const feedback = normalizePronunciationFeedback(
+            parsed,
+            targetText,
+            focusChunk || undefined,
+          );
           res.json({ feedback });
           return;
         }

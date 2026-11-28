@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -10,6 +11,7 @@ import {
 import {
   AlertCircle,
   CheckCircle2,
+  GraduationCap,
   Loader2,
   Mic,
   Play,
@@ -24,14 +26,19 @@ import type {
   PronunciationAttemptRecord,
   PronunciationCheckFeedback,
   PronunciationCheckTarget,
+  PronunciationWordChunk,
 } from '../types/pronunciationCheck';
 import { playGermanAudio, stopCurrentAudio } from '../utils/audioPlayer';
 import {
+  buildFallbackWordChunks,
   cleanTargetForCheck,
+  detectStuckPattern,
   getAccuracyTier,
   normalizePronunciationFeedback,
   sanitizeAudioMimeType,
 } from '../utils/pronunciationCheck';
+import { resolveSyllableAudioTarget } from '../utils/voiceSelection';
+import { PronunciationTeacherPanel } from '../components/PronunciationTeacherPanel';
 
 interface PronunciationCheckContextValue {
   openCheck: (target: PronunciationCheckTarget) => void;
@@ -164,8 +171,15 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [playingTarget, setPlayingTarget] = useState<'normal' | 'slow' | null>(null);
+  const [playingChunkMode, setPlayingChunkMode] = useState<'part' | 'slow' | null>(null);
   const [isPlayingUserClip, setIsPlayingUserClip] = useState(false);
   const [attempts, setAttempts] = useState<PronunciationAttemptRecord[]>([]);
+
+  // Human-Teacher Step-by-Step Breakdown & Drill state
+  const [showTeacherPanel, setShowTeacherPanel] = useState(false);
+  const [activeChunkIndex, setActiveChunkIndex] = useState<number | null>(null);
+  const [masteredChunkIndices, setMasteredChunkIndices] = useState<Set<number>>(() => new Set());
+  const [chunkAttemptCounts, setChunkAttemptCounts] = useState<Record<number, number>>({});
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -176,8 +190,43 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
   const userAudioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlsRef = useRef<string[]>([]);
 
+  const fallbackChunks = useMemo(
+    () => buildFallbackWordChunks(target.text, target.devanagari),
+    [target.text, target.devanagari],
+  );
+
+  // Latest full-word attempt provides the overall word breakdown map & teacher guidance
+  const latestFullWordAttempt = useMemo(
+    () => attempts.find((a) => !a.practicedChunk) ?? null,
+    [attempts],
+  );
+
   const latestAttempt = attempts[0] ?? null;
   const feedback = latestAttempt?.feedback ?? null;
+
+  const activeWordChunks: PronunciationWordChunk[] = useMemo(() => {
+    const evaluated = latestFullWordAttempt?.feedback.wordBreakdown;
+    if (evaluated && evaluated.length > 0) {
+      return evaluated;
+    }
+    return fallbackChunks;
+  }, [latestFullWordAttempt, fallbackChunks]);
+
+  const activeChunk: PronunciationWordChunk | null =
+    activeChunkIndex !== null &&
+    activeChunkIndex >= 0 &&
+    activeChunkIndex < activeWordChunks.length
+      ? activeWordChunks[activeChunkIndex]
+      : null;
+
+  const stuckInfo = useMemo(() => detectStuckPattern(attempts), [attempts]);
+
+  // Latest feedback specifically for the currently active chunk (if learner just drilled it)
+  const latestChunkFeedback = useMemo(() => {
+    if (!activeChunk) return null;
+    const match = attempts.find((a) => a.practicedChunk === activeChunk.chunk);
+    return match?.feedback ?? null;
+  }, [attempts, activeChunk]);
 
   const cleanupRecordingHandles = useCallback(() => {
     if (timerRef.current !== null) {
@@ -238,6 +287,30 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
     }
   };
 
+  const handlePlayChunk = async (chunk: PronunciationWordChunk, slowInWord: boolean) => {
+    setPlayingChunkMode(slowInWord ? 'slow' : 'part');
+    setErrorMsg(null);
+
+    if (slowInWord) {
+      const res = await playGermanAudio(target.text, { slow: true, ipa: target.ipa });
+      setPlayingChunkMode(null);
+      if (res.error) setErrorMsg(res.error);
+      return;
+    }
+
+    const resolved = resolveSyllableAudioTarget({
+      segment: chunk.speakText || chunk.chunk,
+      word: target.text,
+      wordIpa: target.ipa,
+    });
+    const res = await playGermanAudio(resolved.text, {
+      slow: resolved.forceSlow,
+      ipa: resolved.ipa,
+    });
+    setPlayingChunkMode(null);
+    if (res.error) setErrorMsg(res.error);
+  };
+
   const handlePlayUserRecording = (audioUrl: string) => {
     stopCurrentAudio();
     if (userAudioRef.current) {
@@ -276,20 +349,45 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
       });
 
       const mimeType = sanitizeAudioMimeType(rawMime || blob.type);
+      const isDrillingChunk = activeChunk !== null && activeChunkIndex !== null;
+
+      const relevantPrevious = isDrillingChunk
+        ? attempts.filter((a) => a.practicedChunk === activeChunk.chunk)
+        : attempts.filter((a) => !a.practicedChunk);
+
+      const previousScores = relevantPrevious.map((a) => a.feedback.accuracyScore).slice(0, 5);
+      const previousWeakSegments = Array.from(
+        new Set(
+          relevantPrevious.flatMap((a) =>
+            (a.feedback.wordBreakdown ?? [])
+              .filter((c) => c.status === 'needs-work' || c.status === 'close')
+              .map((c) => c.chunk),
+          ),
+        ),
+      ).slice(0, 5);
+
       const res = await fetch('/api/evaluate-pronunciation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          targetText: target.text,
-          devanagariHint: target.devanagari ?? '',
-          ipaHint: target.ipa ?? '',
+          targetText: isDrillingChunk ? activeChunk.speakText || activeChunk.chunk : target.text,
+          devanagariHint: isDrillingChunk
+            ? activeChunk.targetDevanagari
+            : target.devanagari ?? '',
+          ipaHint: isDrillingChunk ? '' : target.ipa ?? '',
           audioBase64: base64,
           mimeType,
+          attemptNumber: relevantPrevious.length + 1,
+          previousScores,
+          previousWeakSegments,
+          focusChunk: isDrillingChunk ? activeChunk.chunk : undefined,
+          parentTarget: isDrillingChunk ? target.text : undefined,
+          chunkRole: isDrillingChunk ? activeChunk.role : undefined,
         }),
       });
 
       const payload = (await res.json()) as {
-        feedback?: Partial<PronunciationCheckFeedback>;
+        feedback?: Partial<PronunciationCheckFeedback> & Record<string, unknown>;
         error?: string;
       };
 
@@ -300,7 +398,11 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
         return;
       }
 
-      const normalized = normalizePronunciationFeedback(payload.feedback, target.text);
+      const normalized = normalizePronunciationFeedback(
+        payload.feedback,
+        isDrillingChunk ? activeChunk.chunk : target.text,
+        isDrillingChunk ? activeChunk.chunk : undefined,
+      );
       const audioUrl = URL.createObjectURL(blob);
       objectUrlsRef.current.push(audioUrl);
 
@@ -310,9 +412,27 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
           timestampMs: Date.now(),
           feedback: normalized,
           audioUrl,
+          practicedChunk: isDrillingChunk ? activeChunk.chunk : null,
         },
         ...prev,
       ]);
+
+      // Automatically surface the interactive prefix/infix/suffix breakdown map after evaluation
+      setShowTeacherPanel(true);
+
+      if (isDrillingChunk && activeChunkIndex !== null) {
+        setChunkAttemptCounts((prev) => ({
+          ...prev,
+          [activeChunkIndex]: (prev[activeChunkIndex] ?? 0) + 1,
+        }));
+        if (normalized.accuracyScore >= 70) {
+          setMasteredChunkIndices((prev) => {
+            const next = new Set(prev);
+            next.add(activeChunkIndex);
+            return next;
+          });
+        }
+      }
     } catch {
       setErrorMsg('Network error while analyzing your voice. Please try recording again.');
     } finally {
@@ -428,6 +548,22 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
     }
   };
 
+  const handleToggleTeacherBreakdown = () => {
+    if (showTeacherPanel) {
+      setShowTeacherPanel(false);
+      setActiveChunkIndex(null);
+    } else {
+      setShowTeacherPanel(true);
+      if (activeWordChunks.length > 0) {
+        const startIdx =
+          latestFullWordAttempt?.feedback.teacherGuidance?.recommendedChunkIndex ?? 0;
+        setActiveChunkIndex(
+          startIdx >= 0 && startIdx < activeWordChunks.length ? startIdx : 0,
+        );
+      }
+    }
+  };
+
   const tier = feedback ? getAccuracyTier(feedback.accuracyScore) : null;
 
   return (
@@ -435,7 +571,7 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
       role="dialog"
       aria-modal="true"
       aria-labelledby="pronunciation-check-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/55 backdrop-blur-xs overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/55 backdrop-blur-xs overflow-y-auto"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -443,11 +579,11 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
       <div className="bg-white border border-slate-200 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto">
         {/* Top Modal Header */}
         <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-xs border-b border-slate-200 px-5 sm:px-6 py-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-700 shrink-0">
               <Mic className="w-4 h-4" aria-hidden="true" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2
                 id="pronunciation-check-title"
                 className="font-display text-lg font-semibold text-slate-900 leading-tight"
@@ -455,7 +591,7 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
                 Verify Your German Pronunciation
               </h2>
               <p className="text-xs text-slate-500">
-                Record your voice to get an accuracy score &amp; personalized corrections
+                Accuracy score, prefix/infix/suffix breakdown &amp; step-by-step teacher coaching
               </p>
             </div>
           </div>
@@ -464,7 +600,7 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
             type="button"
             onClick={onClose}
             aria-label="Close pronunciation checker"
-            className="p-2 min-w-[36px] min-h-[36px] rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 cursor-pointer"
+            className="p-2 min-w-[36px] min-h-[36px] rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" aria-hidden="true" />
           </button>
@@ -526,73 +662,57 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
                 </button>
               </div>
             </div>
-          </div>
 
-          {/* Recording Control Center */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col items-center text-center gap-3">
-            {isAnalyzing ? (
-              <div className="py-4 flex flex-col items-center gap-3">
-                <Loader2 className="w-9 h-9 text-blue-700 animate-spin" aria-hidden="true" />
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">
-                    Analyzing your German pronunciation…
-                  </p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Checking vowel sounds, consonants, word stress &amp; clarity
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <>
+            {/* Instant Step-by-Step Teacher Breakdown Trigger */}
+            {activeWordChunks.length > 1 && (
+              <div className="pt-2 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-slate-600">
+                  Struggling with a tricky sound? Break it into prefix, infix &amp; suffix parts.
+                </span>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (isRecording) {
-                      stopRecording();
-                    } else {
-                      void startRecording();
-                    }
-                  }}
-                  className={`inline-flex items-center justify-center gap-2.5 px-6 py-3.5 min-h-[50px] text-sm font-semibold rounded-xl shadow-xs transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 ${
-                    isRecording
-                      ? 'bg-rose-600 hover:bg-rose-700 text-white'
-                      : 'bg-blue-700 hover:bg-blue-800 text-white'
+                  disabled={isRecording}
+                  onClick={handleToggleTeacherBreakdown}
+                  aria-expanded={showTeacherPanel}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[34px] text-xs font-semibold rounded-lg border transition-colors cursor-pointer disabled:opacity-50 ${
+                    showTeacherPanel
+                      ? 'bg-blue-700 text-white border-blue-700 hover:bg-blue-800'
+                      : 'bg-white text-blue-800 border-blue-200 hover:bg-blue-50'
                   }`}
                 >
-                  {isRecording ? (
-                    <>
-                      <Square className="w-4 h-4 fill-current" aria-hidden="true" />
-                      <span>Stop &amp; Check Accuracy ({elapsedSec}s)</span>
-                    </>
-                  ) : (
-                    <>
-                      <Mic className="w-4 h-4" aria-hidden="true" />
-                      <span>{feedback ? 'Record Again & Improve Score' : 'Start Recording My Voice'}</span>
-                    </>
-                  )}
+                  <GraduationCap className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    {showTeacherPanel
+                      ? 'Hide Part-by-Part Breakdown'
+                      : 'Break Into Parts & Practice Step-by-Step'}
+                  </span>
                 </button>
-
-                {isRecording ? (
-                  <div className="w-full max-w-xs space-y-1.5">
-                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-rose-500 transition-all duration-75"
-                        style={{ width: `${Math.max(8, micLevel)}%` }}
-                      />
-                    </div>
-                    <p className="text-xs text-rose-700 font-medium">
-                      Listening… speak clearly, then tap Stop (auto-stops at {MAX_RECORDING_SECONDS}s)
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-500">
-                    Tip: Listen once first, then tap Start Recording, speak “{target.text}”, and tap
-                    Stop.
-                  </p>
-                )}
-              </>
+              </div>
             )}
           </div>
+
+          {/* Interactive Word Breakdown Map & Human-Teacher Step-by-Step Drill Panel */}
+          {showTeacherPanel && (
+            <PronunciationTeacherPanel
+              targetText={target.text}
+              chunks={activeWordChunks}
+              activeChunkIndex={activeChunkIndex}
+              masteredChunkIndices={masteredChunkIndices}
+              chunkAttemptCount={
+                activeChunkIndex !== null ? (chunkAttemptCounts[activeChunkIndex] ?? 0) : 0
+              }
+              latestChunkFeedback={latestChunkFeedback}
+              teacherGuidance={latestFullWordAttempt?.feedback.teacherGuidance}
+              stuckInfo={stuckInfo}
+              isRecording={isRecording}
+              playingChunkMode={playingChunkMode}
+              onSelectChunk={(idx) => {
+                setErrorMsg(null);
+                setActiveChunkIndex(idx);
+              }}
+              onPlayChunk={(chunk, slowInWord) => void handlePlayChunk(chunk, slowInWord)}
+            />
+          )}
 
           {/* Error Notice */}
           {errorMsg && (
@@ -618,7 +738,11 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
                       {feedback.accuracyScore}%
                     </span>
                     <div>
-                      <p className="text-sm font-semibold text-slate-900">{tier.label}</p>
+                      <p className="text-sm font-semibold text-slate-900">
+                        {feedback.practicedChunk
+                          ? `Part “${feedback.practicedChunk}” · ${tier.label}`
+                          : tier.label}
+                      </p>
                       <p className="text-xs font-devanagari text-slate-600">{tier.hindiLabel}</p>
                     </div>
                   </div>
@@ -746,12 +870,89 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
                           : 'bg-slate-50 border-slate-200 text-slate-600'
                       }`}
                     >
-                      Try #{attempts.length - idx}: {att.feedback.accuracyScore}%
+                      {att.practicedChunk
+                        ? `Part ${att.practicedChunk}: ${att.feedback.accuracyScore}%`
+                        : `Try #${attempts.length - idx}: ${att.feedback.accuracyScore}%`}
                     </span>
                   ))}
                 </div>
               )}
             </div>
+          )}
+        </div>
+
+        {/* Sticky Recording Dock (always visible whether in Full Word or Chunk Drill mode) */}
+        <div className="sticky bottom-0 z-10 bg-white/95 backdrop-blur-xs border-t border-slate-200 px-5 sm:px-6 py-3.5 flex flex-col items-center text-center gap-2">
+          {isAnalyzing ? (
+            <div className="py-1.5 flex items-center justify-center gap-2.5">
+              <Loader2 className="w-5 h-5 text-blue-700 animate-spin shrink-0" aria-hidden="true" />
+              <div className="text-left">
+                <p className="text-sm font-semibold text-slate-900 leading-tight">
+                  {activeChunk
+                    ? `Checking your “${activeChunk.chunk}” sound…`
+                    : 'Analyzing your German pronunciation…'}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Checking each prefix, infix, vowel &amp; ending sound
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  if (isRecording) {
+                    stopRecording();
+                  } else {
+                    void startRecording();
+                  }
+                }}
+                className={`w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-6 py-3 min-h-[46px] text-sm font-semibold rounded-xl shadow-xs transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 ${
+                  isRecording
+                    ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                    : 'bg-blue-700 hover:bg-blue-800 text-white'
+                }`}
+              >
+                {isRecording ? (
+                  <>
+                    <Square className="w-4 h-4 fill-current" aria-hidden="true" />
+                    <span>Stop &amp; Check Accuracy ({elapsedSec}s)</span>
+                  </>
+                ) : (
+                  <>
+                    <Mic className="w-4 h-4" aria-hidden="true" />
+                    <span>
+                      {activeChunk
+                        ? `Record Just “${activeChunk.chunk}”`
+                        : feedback
+                          ? 'Record Full Word Again'
+                          : 'Start Recording My Voice'}
+                    </span>
+                  </>
+                )}
+              </button>
+
+              {isRecording ? (
+                <div className="w-full max-w-xs space-y-1">
+                  <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-rose-500 transition-all duration-75"
+                      style={{ width: `${Math.max(8, micLevel)}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-rose-700 font-medium">
+                    Listening… speak clearly, then tap Stop (auto-stops at {MAX_RECORDING_SECONDS}s)
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  {activeChunk
+                    ? `Teacher Drill: Say just “${activeChunk.chunk}” (${activeChunk.targetDevanagari}) clearly, then tap Stop.`
+                    : `Listen once first, then record “${target.text}” and tap Stop.`}
+                </p>
+              )}
+            </>
           )}
         </div>
       </div>
