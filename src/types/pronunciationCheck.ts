@@ -1,5 +1,7 @@
 export type PronunciationRating = 'excellent' | 'good' | 'fair' | 'needs-practice';
 
+export type PronunciationCheckMode = 'fast' | 'advanced';
+
 export type ChunkPartRole = 'prefix' | 'root' | 'infix' | 'suffix' | 'syllable' | 'word';
 
 export type ChunkAccuracyStatus = 'pending' | 'correct' | 'close' | 'needs-work';
@@ -62,6 +64,8 @@ export interface PronunciationCheckFeedback {
   teacherGuidance?: TeacherStepGuidance;
   /** Set when this evaluation was for an isolated prefix/infix/suffix chunk */
   practicedChunk?: string;
+  /** Which evaluation model mode produced this result */
+  evaluationMode?: PronunciationCheckMode;
 }
 
 export interface PronunciationCheckTarget {
@@ -78,4 +82,5 @@ export interface PronunciationAttemptRecord {
   audioUrl: string | null;
   /** Null for full-word attempts, or chunk string when drilling a single part */
   practicedChunk?: string | null;
+  evaluationMode?: PronunciationCheckMode;
 }

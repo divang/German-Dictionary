@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Cloud,
   CloudOff,
@@ -18,6 +18,7 @@ import {
 import type { A1ExamAttempt, A1UserProgress, A1WorkspaceTab } from '../types/a1';
 import { calculateA1Readiness } from '../utils/a1Progress';
 import { A1CurriculumPanel } from './A1CurriculumPanel';
+import { A1ExamGuidePanel } from './A1ExamGuidePanel';
 import { A1MockExamPanel } from './A1MockExamPanel';
 import { A1SkillsPanel } from './A1SkillsPanel';
 
@@ -45,8 +46,11 @@ interface A1CertificateViewProps {
   onLookupWordInDictionary: (word: string) => void;
 }
 
-const WORKSPACE_TABS: { id: A1WorkspaceTab; label: string; sub: string }[] = [
-  { id: 'modules', label: 'Curriculum', sub: '8 Modules' },
+type A1DisplayTab = A1WorkspaceTab | 'exam-guide';
+
+const WORKSPACE_TABS: { id: A1DisplayTab; label: string; sub: string }[] = [
+  { id: 'modules', label: 'Curriculum', sub: `${A1_MODULES.length} Modules` },
+  { id: 'exam-guide', label: 'Exam Guide', sub: 'Syllabus & Grammar' },
   { id: 'hoeren', label: 'Hören', sub: 'Listening' },
   { id: 'lesen', label: 'Lesen', sub: 'Reading' },
   { id: 'schreiben', label: 'Schreiben', sub: 'Writing' },
@@ -70,6 +74,8 @@ export function A1CertificateView({
   onRecordExamAttempt,
   onLookupWordInDictionary,
 }: A1CertificateViewProps) {
+  const [showExamGuide, setShowExamGuide] = useState(false);
+
   const totalVocabCount = useMemo(
     () => A1_MODULES.reduce((sum, mod) => sum + mod.vocabulary.length, 0),
     [],
@@ -86,6 +92,16 @@ export function A1CertificateView({
   );
 
   const isCloudActive = Boolean(cloudUser && cloudUser.emailVerified);
+  const activeDisplayTab: A1DisplayTab = showExamGuide ? 'exam-guide' : progress.lastActiveTab;
+
+  const handleSelectWorkspaceTab = (tab: A1DisplayTab) => {
+    if (tab === 'exam-guide') {
+      setShowExamGuide(true);
+      return;
+    }
+    setShowExamGuide(false);
+    onChangeTab(tab);
+  };
 
   return (
     <div className="space-y-6">
@@ -100,8 +116,9 @@ export function A1CertificateView({
               German A1 Certificate Workspace
             </h1>
             <p className="text-sm text-slate-600 max-w-2xl">
-              Master all 8 CEFR A1 modules, train Hören, Lesen, Schreiben, and Sprechen, and sync
-              your progress seamlessly across phone, tablet, and desktop.
+              Master all {A1_MODULES.length} CEFR A1 modules, study the complete Goethe A1 grammar &amp;
+              8-week exam roadmap, train Hören, Lesen, Schreiben, and Sprechen, and sync your
+              progress across devices.
             </p>
           </div>
 
@@ -195,6 +212,7 @@ export function A1CertificateView({
             <button
               type="button"
               onClick={() => {
+                setShowExamGuide(false);
                 onSelectModule(resumeModule.id);
                 onChangeTab('modules');
               }}
@@ -223,19 +241,19 @@ export function A1CertificateView({
         </div>
       </section>
 
-      {/* 6-Tab Workspace Switcher */}
+      {/* 7-Tab Workspace Switcher */}
       <nav
         aria-label="A1 Certificate sections"
         className="bg-white border border-slate-200 rounded-xl p-1.5 overflow-x-auto"
       >
-        <div className="grid grid-cols-6 min-w-[600px] gap-1">
+        <div className="grid grid-cols-7 min-w-[700px] gap-1">
           {WORKSPACE_TABS.map((tab) => {
-            const active = progress.lastActiveTab === tab.id;
+            const active = activeDisplayTab === tab.id;
             return (
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => onChangeTab(tab.id)}
+                onClick={() => handleSelectWorkspaceTab(tab.id)}
                 aria-current={active ? 'page' : undefined}
                 className={`px-3 py-2 min-h-[44px] rounded-lg text-left transition-colors cursor-pointer ${
                   active
@@ -258,7 +276,7 @@ export function A1CertificateView({
       </nav>
 
       {/* Active Workspace Panel */}
-      {progress.lastActiveTab === 'modules' && (
+      {activeDisplayTab === 'modules' && (
         <A1CurriculumPanel
           modules={A1_MODULES}
           activeModuleId={progress.lastActiveModuleId}
@@ -271,12 +289,27 @@ export function A1CertificateView({
         />
       )}
 
-      {(progress.lastActiveTab === 'hoeren' ||
-        progress.lastActiveTab === 'lesen' ||
-        progress.lastActiveTab === 'schreiben' ||
-        progress.lastActiveTab === 'sprechen') && (
+      {activeDisplayTab === 'exam-guide' && (
+        <A1ExamGuidePanel
+          completedLessonIds={progress.completedLessonIds}
+          onJumpToModule={(moduleId) => {
+            setShowExamGuide(false);
+            onSelectModule(moduleId);
+            onChangeTab('modules');
+          }}
+          onJumpToTab={(tab) => {
+            setShowExamGuide(false);
+            onChangeTab(tab);
+          }}
+        />
+      )}
+
+      {(activeDisplayTab === 'hoeren' ||
+        activeDisplayTab === 'lesen' ||
+        activeDisplayTab === 'schreiben' ||
+        activeDisplayTab === 'sprechen') && (
         <A1SkillsPanel
-          activeSkill={progress.lastActiveTab}
+          activeSkill={activeDisplayTab}
           listeningTasks={A1_LISTENING_TASKS}
           readingTasks={A1_READING_TASKS}
           writingPrompts={A1_WRITING_PROMPTS}
@@ -284,7 +317,7 @@ export function A1CertificateView({
         />
       )}
 
-      {progress.lastActiveTab === 'mock-exam' && (
+      {activeDisplayTab === 'mock-exam' && (
         <A1MockExamPanel
           questions={A1_MOCK_EXAM_QUESTIONS}
           attemptHistory={examAttempts}

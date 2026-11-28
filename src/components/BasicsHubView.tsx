@@ -7,9 +7,11 @@ import {
   Hash,
   HelpCircle,
   Layers,
+  LayoutGrid,
   Loader2,
   Plus,
   Sparkles,
+  Table2,
   Users,
   Volume2,
 } from 'lucide-react';
@@ -95,6 +97,7 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
 
   // 1. Alphabet state
   const [selectedLetter, setSelectedLetter] = useState<string>('A');
+  const [alphabetViewMode, setAlphabetViewMode] = useState<'grid' | 'table'>('grid');
   const [extraWordsByLetter, setExtraWordsByLetter] = useState<Record<string, BasicsExampleWord[]>>(
     {},
   );
@@ -297,65 +300,380 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
       {/* ================================================================= */}
       {activeTab === 'alphabet' && (
         <section aria-label="German Alphabet" className="space-y-6">
-          {/* 30-Letter Picker Grid */}
-          <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 shadow-xs">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <h2 className="font-display text-lg font-semibold text-slate-900">
-                Choose a Letter (26 Letters + Ä, Ö, Ü, ß)
-              </h2>
-              <span className="text-xs text-slate-500">
-                Tap any letter for its German name, pronunciation, and example words
-              </span>
+          {/* 30-Letter Picker Grid & Full Hindi Pronunciation Chart */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display text-lg font-semibold text-slate-900">
+                  German Alphabet Table (26 Letters + Ä, Ö, Ü, ß)
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Each letter shows its German name &amp; Hindi pronunciation (हिंदी में उच्चारण). Tap any letter for example words.
+                </p>
+              </div>
+
+              <div
+                role="group"
+                aria-label="Alphabet table layout"
+                className="inline-flex items-center p-1 rounded-lg bg-slate-100 border border-slate-200 self-start sm:self-auto shrink-0"
+              >
+                <button
+                  type="button"
+                  aria-pressed={alphabetViewMode === 'grid'}
+                  onClick={() => setAlphabetViewMode('grid')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[34px] text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                    alphabetViewMode === 'grid'
+                      ? 'bg-white text-blue-800 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Letter Grid</span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={alphabetViewMode === 'table'}
+                  onClick={() => setAlphabetViewMode('table')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[34px] text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                    alphabetViewMode === 'table'
+                      ? 'bg-white text-blue-800 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Table2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Full Hindi Table</span>
+                </button>
+              </div>
             </div>
 
-            <div className="grid grid-cols-5 sm:grid-cols-10 gap-2">
-              {GERMAN_ALPHABET.map((item) => {
-                const isActive = item.letter === currentLetterEntry.letter;
-                const isSpecial = ['Ä', 'Ö', 'Ü', 'ß'].includes(item.letter);
-                return (
-                  <button
-                    key={item.letter}
-                    type="button"
-                    onClick={() => {
-                      setSelectedLetter(item.letter);
-                      setLoadMoreError(null);
-                    }}
-                    aria-pressed={isActive}
-                    aria-label={`Letter ${item.letter}, pronounced ${item.nameGerman}`}
-                    className={`flex flex-col items-center justify-center py-2 px-1.5 min-h-[54px] rounded-lg border transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 ${
-                      isActive
-                        ? 'bg-blue-700 border-blue-700 text-white'
-                        : isSpecial
-                          ? 'bg-amber-50/70 border-amber-200 text-slate-900 hover:bg-amber-100'
-                          : 'bg-slate-50 border-slate-200 text-slate-900 hover:bg-slate-100'
-                    }`}
-                  >
-                    <span className="font-display text-lg font-semibold leading-none">
-                      {item.letter}
-                    </span>
-                    <span
-                      className={`text-[11px] mt-1 leading-none ${
-                        isActive ? 'text-blue-100' : 'text-slate-500'
+            {alphabetViewMode === 'grid' ? (
+              <div
+                data-testid="alphabet-letter-grid"
+                className="grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-10 gap-2"
+              >
+                {GERMAN_ALPHABET.map((item) => {
+                  const isActive = item.letter === currentLetterEntry.letter;
+                  const isSpecial = ['Ä', 'Ö', 'Ü', 'ß'].includes(item.letter);
+                  const isTricky = Boolean(item.nameDiffersFromSound);
+                  return (
+                    <button
+                      key={item.letter}
+                      type="button"
+                      onClick={() => {
+                        setSelectedLetter(item.letter);
+                        setLoadMoreError(null);
+                      }}
+                      aria-pressed={isActive}
+                      aria-label={`Letter ${item.letter}, name ${item.nameGerman} (${item.devanagariName}), speaking sound ${item.speakingSoundHindi}`}
+                      className={`flex flex-col items-center justify-center py-2.5 px-1.5 min-h-[88px] rounded-lg border transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 ${
+                        isActive
+                          ? 'bg-blue-700 border-blue-700 text-white shadow-xs'
+                          : isTricky
+                            ? 'bg-emerald-50/70 border-emerald-300 text-slate-900 hover:bg-emerald-100/80'
+                            : isSpecial
+                              ? 'bg-amber-50/70 border-amber-200 text-slate-900 hover:bg-amber-100'
+                              : 'bg-slate-50 border-slate-200 text-slate-900 hover:bg-slate-100'
                       }`}
                     >
-                      {item.nameGerman}
-                    </span>
-                  </button>
+                      <span className="font-display text-lg font-semibold leading-none">
+                        {item.letter}
+                      </span>
+                      <span
+                        className={`font-devanagari text-xs font-semibold mt-1 leading-tight text-center ${
+                          isActive ? 'text-white' : 'text-blue-700'
+                        }`}
+                      >
+                        {item.devanagariName}
+                      </span>
+                      <span
+                        className={`text-[10px] mt-0.5 leading-none truncate max-w-full ${
+                          isActive ? 'text-blue-100' : 'text-slate-500'
+                        }`}
+                      >
+                        {item.nameGerman.split(' / ')[0]}
+                      </span>
+                      {isTricky && (
+                        <span
+                          className={`mt-1.5 px-1.5 py-0.5 rounded font-devanagari text-[10px] font-semibold leading-tight whitespace-nowrap ${
+                            isActive
+                              ? 'bg-blue-800/80 text-emerald-200'
+                              : 'bg-white/90 text-emerald-800 border border-emerald-200'
+                          }`}
+                        >
+                          आवाज़:{' '}
+                          {item.letter === 'V'
+                            ? 'फ़ / व'
+                            : item.letter === 'ß'
+                              ? 'स (ss)'
+                              : item.speakingSoundHindi}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div
+                data-testid="alphabet-hindi-table"
+                className="overflow-x-auto border border-slate-200 rounded-xl"
+              >
+                <table className="w-full text-left border-collapse min-w-[760px]">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                      <th className="py-2.5 px-3">Letter</th>
+                      <th className="py-2.5 px-3">Letter Name (नाम)</th>
+                      <th className="py-2.5 px-3">Speaking Sound (बोलने की आवाज़)</th>
+                      <th className="py-2.5 px-3">Rule</th>
+                      <th className="py-2.5 px-3 text-right">Listen / Practice</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {GERMAN_ALPHABET.map((item) => {
+                      const isActive = item.letter === currentLetterEntry.letter;
+                      const isSpecial = ['Ä', 'Ö', 'Ü', 'ß'].includes(item.letter);
+                      const isTricky = Boolean(item.nameDiffersFromSound);
+                      const rowNameKey = `alpha-table-name-${item.letter}`;
+                      const rowSoundKey = `alpha-table-sound-${item.letter}`;
+                      return (
+                        <tr
+                          key={item.letter}
+                          className={`transition-colors ${
+                            isActive
+                              ? 'bg-blue-50/70'
+                              : isTricky
+                                ? 'bg-emerald-50/40 hover:bg-emerald-50/80'
+                                : isSpecial
+                                  ? 'bg-amber-50/40 hover:bg-amber-50/80'
+                                  : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedLetter(item.letter);
+                                setLoadMoreError(null);
+                              }}
+                              className="font-display text-base font-bold text-slate-900 hover:text-blue-700 cursor-pointer"
+                            >
+                              {item.displayPair}
+                            </button>
+                          </td>
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            <span className="font-medium text-slate-800">{item.nameGerman}</span>{' '}
+                            <span className="font-devanagari font-semibold text-blue-700">
+                              ({item.devanagariName})
+                            </span>
+                            <span className="block font-mono text-[11px] text-slate-500">
+                              {item.ipa}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="flex flex-wrap items-baseline gap-1.5">
+                              <span
+                                className={`font-devanagari text-base font-semibold ${
+                                  isTricky ? 'text-emerald-800' : 'text-slate-900'
+                                }`}
+                              >
+                                {item.speakingSoundHindi}
+                              </span>
+                              <span className="font-mono text-[11px] text-slate-500">
+                                {item.speakingSoundIpa}
+                              </span>
+                            </div>
+                            <span className="block text-xs text-slate-600">
+                              {item.speakingSoundRoman}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-xs text-slate-600 max-w-xs">
+                            {item.soundSummary}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleSpeak(rowNameKey, item.spokenLetterPrompt, false)
+                                }
+                                aria-label={`Listen to letter name of ${item.letter}`}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[32px] text-xs font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
+                              >
+                                {playingId === rowNameKey ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                                ) : (
+                                  <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                                )}
+                                <span>Name</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleSpeak(rowSoundKey, item.spokenSoundPrompt, true)
+                                }
+                                aria-label={`Listen to speaking sound of ${item.letter}`}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[32px] text-xs font-semibold text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md cursor-pointer"
+                              >
+                                {playingId === rowSoundKey ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                                ) : (
+                                  <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                                )}
+                                <span>Sound</span>
+                              </button>
+                              <SpeakCheckButton
+                                targetText={item.spokenSoundPrompt}
+                                displayLabel={`${item.letter} speaking sound (${item.speakingSoundHindi})`}
+                                devanagari={item.speakingSoundHindi}
+                                ipa={item.speakingSoundIpa}
+                                variant="compact"
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Dedicated Speaking Sound Guide for the 6 Tricky Letters: J, V, W, Y, Z, ß */}
+          <div
+            data-testid="tricky-letters-speaking-sounds"
+            className="bg-white border border-emerald-200 rounded-xl p-4 sm:p-5 shadow-xs space-y-3"
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div>
+                <h3 className="font-display text-base sm:text-lg font-semibold text-slate-900">
+                  Speaking Sound vs. Letter Name: J, V, W, Y, Z &amp; ß (Eszett)
+                </h3>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  These 6 letters sound different inside German words than their alphabet names — tap{' '}
+                  <strong className="text-emerald-800">Hear Sound</strong> to listen to how each one
+                  actually sounds when spoken.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {GERMAN_ALPHABET.filter((item) => item.nameDiffersFromSound).map((item) => {
+                const isSelected = item.letter === currentLetterEntry.letter;
+                const soundAudioId = `tricky-sound-${item.letter}`;
+                const nameAudioId = `tricky-name-${item.letter}`;
+                return (
+                  <div
+                    key={item.letter}
+                    className={`rounded-xl border p-3.5 flex flex-col justify-between gap-3 transition-colors ${
+                      isSelected
+                        ? 'bg-emerald-50/70 border-emerald-400'
+                        : 'bg-slate-50/70 border-slate-200 hover:border-emerald-300'
+                    }`}
+                  >
+                    <div className="space-y-2.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedLetter(item.letter);
+                          setLoadMoreError(null);
+                        }}
+                        className="w-full text-left group cursor-pointer flex items-baseline justify-between gap-2"
+                      >
+                        <span className="font-display text-xl font-bold text-slate-900 group-hover:text-blue-700 shrink-0">
+                          {item.displayPair}
+                        </span>
+                        <span className="text-xs text-slate-500 text-right leading-snug">
+                          Name: <strong className="text-slate-700">{item.nameGerman}</strong> (
+                          <span className="font-devanagari">{item.devanagariName}</span>)
+                        </span>
+                      </button>
+
+                      <div className="rounded-lg bg-white border border-emerald-200 px-3 py-2 space-y-0.5">
+                        <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+                            Speaking Sound
+                          </span>
+                          <span className="font-mono text-[11px] text-slate-500">
+                            {item.speakingSoundIpa}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          <span className="font-devanagari text-lg font-bold text-emerald-800">
+                            {item.speakingSoundHindi}
+                          </span>
+                          <span className="text-xs font-medium text-slate-700">
+                            {item.speakingSoundRoman}
+                          </span>
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-slate-600 leading-snug">{item.hindiTip}</p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-200/80">
+                      <button
+                        type="button"
+                        onClick={() => void handleSpeak(soundAudioId, item.spokenSoundPrompt, true)}
+                        aria-label={`Hear speaking sound of ${item.letter}`}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[34px] text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-md transition-colors cursor-pointer"
+                      >
+                        {playingId === soundAudioId ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        )}
+                        <span>Hear Sound</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleSpeak(nameAudioId, item.spokenLetterPrompt, false)
+                        }
+                        aria-label={`Hear letter name of ${item.letter}`}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[34px] text-xs font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-md transition-colors cursor-pointer"
+                      >
+                        {playingId === nameAudioId ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        )}
+                        <span>Name</span>
+                      </button>
+                      <SpeakCheckButton
+                        targetText={item.spokenSoundPrompt}
+                        displayLabel={`${item.letter} speaking sound (${item.speakingSoundHindi})`}
+                        devanagari={item.speakingSoundHindi}
+                        ipa={item.speakingSoundIpa}
+                        variant="compact"
+                      />
+                    </div>
+                  </div>
                 );
               })}
             </div>
           </div>
 
           {/* Selected Letter Spotlight */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
+          <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-5">
               <div className="flex items-start gap-4 sm:gap-5">
-                <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center shrink-0">
-                  <span className="font-display text-3xl sm:text-4xl font-semibold text-blue-800">
-                    {currentLetterEntry.displayPair}
-                  </span>
+                <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl bg-blue-50 border border-blue-200 flex flex-col items-center justify-center shrink-0 px-1 text-center">
+                  {currentLetterEntry.letter === 'ß' ? (
+                    <>
+                      <span className="font-display text-3xl sm:text-4xl font-semibold text-blue-800 leading-none">
+                        ß
+                      </span>
+                      <span className="text-[11px] font-semibold text-blue-700 mt-1 leading-none">
+                        Eszett
+                      </span>
+                    </>
+                  ) : (
+                    <span className="font-display text-3xl sm:text-4xl font-semibold text-blue-800">
+                      {currentLetterEntry.displayPair}
+                    </span>
+                  )}
                 </div>
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                     <h2 className="font-display text-2xl sm:text-3xl font-semibold text-slate-900">
                       Letter Name: {currentLetterEntry.nameGerman}
@@ -367,6 +685,23 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                       {currentLetterEntry.ipa}
                     </span>
                   </div>
+
+                  {/* Speaking Sound Callout */}
+                  <div className="inline-flex flex-wrap items-baseline gap-x-2.5 gap-y-1 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
+                      Speaking Sound in Words:
+                    </span>
+                    <span className="font-devanagari text-lg font-bold text-emerald-900">
+                      {currentLetterEntry.speakingSoundHindi}
+                    </span>
+                    <span className="text-xs font-medium text-emerald-950">
+                      {currentLetterEntry.speakingSoundRoman}
+                    </span>
+                    <span className="font-mono text-xs text-emerald-700">
+                      {currentLetterEntry.speakingSoundIpa}
+                    </span>
+                  </div>
+
                   <p className="text-sm text-slate-700">{currentLetterEntry.soundSummary}</p>
                   <p className="text-sm text-slate-600">
                     <span className="font-semibold text-slate-800">Hindi Tip:</span>{' '}
@@ -380,12 +715,31 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                   type="button"
                   onClick={() =>
                     void handleSpeak(
+                      `letter-sound-${currentLetterEntry.letter}`,
+                      currentLetterEntry.spokenSoundPrompt,
+                      true,
+                    )
+                  }
+                  aria-label={`Listen to speaking sound of German letter ${currentLetterEntry.letter}`}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[42px] bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
+                >
+                  {playingId === `letter-sound-${currentLetterEntry.letter}` ? (
+                    <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Volume2 className="w-4 h-4" aria-hidden="true" />
+                  )}
+                  <span>Listen Speaking Sound</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void handleSpeak(
                       `letter-${currentLetterEntry.letter}`,
                       currentLetterEntry.spokenLetterPrompt,
                       false,
                     )
                   }
-                  aria-label={`Listen to German letter ${currentLetterEntry.letter}`}
+                  aria-label={`Listen to German letter name ${currentLetterEntry.letter}`}
                   className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[42px] bg-blue-700 hover:bg-blue-800 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
                 >
                   {playingId === `letter-${currentLetterEntry.letter}` ? (
@@ -393,7 +747,7 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                   ) : (
                     <Volume2 className="w-4 h-4" aria-hidden="true" />
                   )}
-                  <span>Listen to Letter</span>
+                  <span>Listen Letter Name</span>
                 </button>
                 <button
                   type="button"
@@ -411,10 +765,10 @@ export function BasicsHubView({ onLookupWordInDictionary }: BasicsHubViewProps) 
                   <span>Slow</span>
                 </button>
                 <SpeakCheckButton
-                  targetText={currentLetterEntry.spokenLetterPrompt}
-                  displayLabel={`Letter ${currentLetterEntry.letter} (${currentLetterEntry.nameGerman})`}
-                  devanagari={currentLetterEntry.devanagariName}
-                  ipa={currentLetterEntry.ipa}
+                  targetText={currentLetterEntry.spokenSoundPrompt}
+                  displayLabel={`${currentLetterEntry.letter} speaking sound (${currentLetterEntry.speakingSoundHindi})`}
+                  devanagari={currentLetterEntry.speakingSoundHindi}
+                  ipa={currentLetterEntry.speakingSoundIpa}
                   variant="primary"
                 />
               </div>

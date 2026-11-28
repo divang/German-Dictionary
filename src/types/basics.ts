@@ -26,6 +26,16 @@ export interface AlphabetLetterEntry {
   spokenLetterPrompt: string; // German text for clean letter-name TTS
   devanagariName: string;
   ipa: string;
+  /** Actual spoken sound this letter makes inside German words (Devanagari) */
+  speakingSoundHindi: string;
+  /** Concise English/Romanized sound cue, e.g. '"y" as in Ja' */
+  speakingSoundRoman: string;
+  /** Exact phoneme IPA of the speaking sound in words (distinct from letter-name IPA) */
+  speakingSoundIpa: string;
+  /** German audio prompt demonstrating the actual spoken sound clearly */
+  spokenSoundPrompt: string;
+  /** True for letters whose alphabet name differs markedly from their spoken sound in words (e.g. J, V, W, Y, Z, ß) */
+  nameDiffersFromSound?: boolean;
   soundSummary: string;
   hindiTip: string;
   examples: BasicsExampleWord[];

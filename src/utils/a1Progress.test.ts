@@ -42,6 +42,9 @@ test('mergeA1Progress unions completed modules and vocab across devices without 
 });
 
 test('calculateA1Readiness computes weighted readiness and examReady threshold accurately', () => {
+  assert.equal(A1_MODULES.length, 10);
+  assert.equal(TOTAL_A1_VOCAB_COUNT, 80);
+
   const empty = calculateA1Readiness(DEFAULT_A1_PROGRESS, A1_MODULES.length, TOTAL_A1_VOCAB_COUNT);
   assert.equal(empty.overallPercent, 0);
   assert.equal(empty.examReady, false);
@@ -49,7 +52,16 @@ test('calculateA1Readiness computes weighted readiness and examReady threshold a
   const ready = calculateA1Readiness(
     {
       ...DEFAULT_A1_PROGRESS,
-      completedLessonIds: ['a1-m1', 'a1-m2', 'a1-m3', 'a1-m4', 'a1-m5', 'a1-m6'],
+      completedLessonIds: [
+        'a1-m1',
+        'a1-m2',
+        'a1-m3',
+        'a1-m4',
+        'a1-m5',
+        'a1-m6',
+        'a1-m7',
+        'a1-m8',
+      ],
       masteredVocabIds: A1_MODULES.flatMap((m) => m.vocabulary.map((v) => v.id)),
       bestMockScore: 80,
       totalMockAttempts: 2,

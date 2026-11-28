@@ -3,6 +3,7 @@ import type {
   ChunkPartRole,
   PronunciationAttemptRecord,
   PronunciationCheckFeedback,
+  PronunciationCheckMode,
   PronunciationCorrectionItem,
   PronunciationRating,
   PronunciationWordChunk,
@@ -34,6 +35,34 @@ export function sanitizeAudioMimeType(rawMime: string | undefined | null): strin
     return base === 'audio/mp3' ? 'audio/mpeg' : base;
   }
   return 'audio/webm';
+}
+
+export function normalizeCheckMode(rawMode: unknown): PronunciationCheckMode {
+  return rawMode === 'advanced' ? 'advanced' : 'fast';
+}
+
+export interface EvaluationModelAttempt {
+  model: 'gemini-3.1-flash-lite' | 'gemini-4-hydrogen';
+  thinkingLevel: 'MINIMAL' | 'LOW';
+}
+
+/**
+ * Returns the ordered Gemini model plan for voice accuracy evaluation:
+ * - 'fast': prioritizes low-latency gemini-3.1-flash-lite (MINIMAL thinking), failing over to gemini-4-hydrogen (LOW)
+ * - 'advanced': prioritizes deeper phonetic accuracy on gemini-4-hydrogen (LOW thinking), failing over to gemini-3.1-flash-lite (MINIMAL)
+ * Note: gemini-4-hydrogen only supports LOW/MEDIUM/HIGH thinking levels (never MINIMAL).
+ */
+export function getEvaluationModelPlan(mode: PronunciationCheckMode): EvaluationModelAttempt[] {
+  if (mode === 'advanced') {
+    return [
+      { model: 'gemini-4-hydrogen', thinkingLevel: 'LOW' },
+      { model: 'gemini-3.1-flash-lite', thinkingLevel: 'MINIMAL' },
+    ];
+  }
+  return [
+    { model: 'gemini-3.1-flash-lite', thinkingLevel: 'MINIMAL' },
+    { model: 'gemini-4-hydrogen', thinkingLevel: 'LOW' },
+  ];
 }
 
 /**
@@ -672,6 +701,7 @@ export function normalizePronunciationFeedback(
   raw: Partial<PronunciationCheckFeedback> & Record<string, unknown>,
   targetText: string,
   practicedChunk?: string,
+  evaluationMode?: PronunciationCheckMode,
 ): PronunciationCheckFeedback {
   const rawScore = Number(raw.accuracyScore);
   const accuracyScore = Number.isFinite(rawScore)
@@ -705,6 +735,12 @@ export function normalizePronunciationFeedback(
     accuracyScore,
   );
 
+  const resolvedMode: PronunciationCheckMode | undefined =
+    evaluationMode ??
+    (raw.evaluationMode === 'fast' || raw.evaluationMode === 'advanced'
+      ? raw.evaluationMode
+      : undefined);
+
   return {
     targetText: targetText.trim(),
     accuracyScore,
@@ -723,5 +759,6 @@ export function normalizePronunciationFeedback(
     wordBreakdown,
     teacherGuidance,
     practicedChunk,
+    evaluationMode: resolvedMode,
   };
 }

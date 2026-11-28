@@ -21,10 +21,12 @@ import {
   Turtle,
   Volume2,
   X,
+  Zap,
 } from 'lucide-react';
 import type {
   PronunciationAttemptRecord,
   PronunciationCheckFeedback,
+  PronunciationCheckMode,
   PronunciationCheckTarget,
   PronunciationWordChunk,
 } from '../types/pronunciationCheck';
@@ -34,6 +36,7 @@ import {
   cleanTargetForCheck,
   detectStuckPattern,
   getAccuracyTier,
+  normalizeCheckMode,
   normalizePronunciationFeedback,
   sanitizeAudioMimeType,
 } from '../utils/pronunciationCheck';
@@ -48,6 +51,15 @@ interface PronunciationCheckContextValue {
 const PronunciationCheckContext = createContext<PronunciationCheckContextValue | null>(null);
 
 const MAX_RECORDING_SECONDS = 12;
+const PRONUNCIATION_MODE_STORAGE_KEY = 'lautbhasha_pronunciation_mode';
+
+function readStoredCheckMode(): PronunciationCheckMode {
+  try {
+    return normalizeCheckMode(window.localStorage.getItem(PRONUNCIATION_MODE_STORAGE_KEY));
+  } catch {
+    return 'fast';
+  }
+}
 
 export function PronunciationCheckProvider({ children }: { children: ReactNode }) {
   const [target, setTarget] = useState<PronunciationCheckTarget | null>(null);
@@ -174,6 +186,8 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
   const [playingChunkMode, setPlayingChunkMode] = useState<'part' | 'slow' | null>(null);
   const [isPlayingUserClip, setIsPlayingUserClip] = useState(false);
   const [attempts, setAttempts] = useState<PronunciationAttemptRecord[]>([]);
+  const [checkMode, setCheckMode] = useState<PronunciationCheckMode>(() => readStoredCheckMode());
+  const [analyzingMode, setAnalyzingMode] = useState<PronunciationCheckMode>('fast');
 
   // Human-Teacher Step-by-Step Breakdown & Drill state
   const [showTeacherPanel, setShowTeacherPanel] = useState(false);
@@ -189,6 +203,21 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
   const audioCtxRef = useRef<AudioContext | null>(null);
   const userAudioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlsRef = useRef<string[]>([]);
+  const lastRecordedRef = useRef<{
+    blob: Blob;
+    rawMime: string;
+    chunk: PronunciationWordChunk | null;
+    chunkIndex: number | null;
+  } | null>(null);
+
+  const handleSelectCheckMode = (nextMode: PronunciationCheckMode) => {
+    setCheckMode(nextMode);
+    try {
+      window.localStorage.setItem(PRONUNCIATION_MODE_STORAGE_KEY, nextMode);
+    } catch {
+      // Ignore storage failures
+    }
+  };
 
   const fallbackChunks = useMemo(
     () => buildFallbackWordChunks(target.text, target.devanagari),
@@ -333,7 +362,24 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
     });
   };
 
-  const evaluateRecordedBlob = async (blob: Blob, rawMime: string) => {
+  const evaluateRecordedBlob = async (
+    blob: Blob,
+    rawMime: string,
+    overrideMode?: PronunciationCheckMode,
+    overrideChunk?: { chunk: PronunciationWordChunk | null; chunkIndex: number | null },
+  ) => {
+    const modeToUse = overrideMode ?? checkMode;
+    const chunkToUse = overrideChunk ? overrideChunk.chunk : activeChunk;
+    const chunkIndexToUse = overrideChunk ? overrideChunk.chunkIndex : activeChunkIndex;
+
+    lastRecordedRef.current = {
+      blob,
+      rawMime,
+      chunk: chunkToUse,
+      chunkIndex: chunkIndexToUse,
+    };
+
+    setAnalyzingMode(modeToUse);
     setIsAnalyzing(true);
     setErrorMsg(null);
     try {
@@ -349,10 +395,10 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
       });
 
       const mimeType = sanitizeAudioMimeType(rawMime || blob.type);
-      const isDrillingChunk = activeChunk !== null && activeChunkIndex !== null;
+      const isDrillingChunk = chunkToUse !== null && chunkIndexToUse !== null;
 
       const relevantPrevious = isDrillingChunk
-        ? attempts.filter((a) => a.practicedChunk === activeChunk.chunk)
+        ? attempts.filter((a) => a.practicedChunk === chunkToUse.chunk)
         : attempts.filter((a) => !a.practicedChunk);
 
       const previousScores = relevantPrevious.map((a) => a.feedback.accuracyScore).slice(0, 5);
@@ -370,24 +416,26 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          targetText: isDrillingChunk ? activeChunk.speakText || activeChunk.chunk : target.text,
+          targetText: isDrillingChunk ? chunkToUse.speakText || chunkToUse.chunk : target.text,
           devanagariHint: isDrillingChunk
-            ? activeChunk.targetDevanagari
+            ? chunkToUse.targetDevanagari
             : target.devanagari ?? '',
           ipaHint: isDrillingChunk ? '' : target.ipa ?? '',
           audioBase64: base64,
           mimeType,
+          mode: modeToUse,
           attemptNumber: relevantPrevious.length + 1,
           previousScores,
           previousWeakSegments,
-          focusChunk: isDrillingChunk ? activeChunk.chunk : undefined,
+          focusChunk: isDrillingChunk ? chunkToUse.chunk : undefined,
           parentTarget: isDrillingChunk ? target.text : undefined,
-          chunkRole: isDrillingChunk ? activeChunk.role : undefined,
+          chunkRole: isDrillingChunk ? chunkToUse.role : undefined,
         }),
       });
 
       const payload = (await res.json()) as {
         feedback?: Partial<PronunciationCheckFeedback> & Record<string, unknown>;
+        mode?: PronunciationCheckMode;
         error?: string;
       };
 
@@ -398,10 +446,12 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
         return;
       }
 
+      const resolvedMode = payload.mode ?? modeToUse;
       const normalized = normalizePronunciationFeedback(
         payload.feedback,
-        isDrillingChunk ? activeChunk.chunk : target.text,
-        isDrillingChunk ? activeChunk.chunk : undefined,
+        isDrillingChunk ? chunkToUse.chunk : target.text,
+        isDrillingChunk ? chunkToUse.chunk : undefined,
+        resolvedMode,
       );
       const audioUrl = URL.createObjectURL(blob);
       objectUrlsRef.current.push(audioUrl);
@@ -412,7 +462,8 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
           timestampMs: Date.now(),
           feedback: normalized,
           audioUrl,
-          practicedChunk: isDrillingChunk ? activeChunk.chunk : null,
+          practicedChunk: isDrillingChunk ? chunkToUse.chunk : null,
+          evaluationMode: resolvedMode,
         },
         ...prev,
       ]);
@@ -420,15 +471,15 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
       // Automatically surface the interactive prefix/infix/suffix breakdown map after evaluation
       setShowTeacherPanel(true);
 
-      if (isDrillingChunk && activeChunkIndex !== null) {
+      if (isDrillingChunk && chunkIndexToUse !== null) {
         setChunkAttemptCounts((prev) => ({
           ...prev,
-          [activeChunkIndex]: (prev[activeChunkIndex] ?? 0) + 1,
+          [chunkIndexToUse]: (prev[chunkIndexToUse] ?? 0) + 1,
         }));
         if (normalized.accuracyScore >= 70) {
           setMasteredChunkIndices((prev) => {
             const next = new Set(prev);
-            next.add(activeChunkIndex);
+            next.add(chunkIndexToUse);
             return next;
           });
         }
@@ -438,6 +489,16 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  const handleRecheckWithAdvanced = () => {
+    const last = lastRecordedRef.current;
+    if (!last || isAnalyzing || isRecording) return;
+    handleSelectCheckMode('advanced');
+    void evaluateRecordedBlob(last.blob, last.rawMime, 'advanced', {
+      chunk: last.chunk,
+      chunkIndex: last.chunkIndex,
+    });
   };
 
   const stopRecording = () => {
@@ -460,7 +521,18 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
       mediaStreamRef.current = stream;
       chunksRef.current = [];
 
@@ -502,9 +574,16 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
             ? 'audio/mp4'
             : '';
 
-      const recorder = preferredMime
-        ? new MediaRecorder(stream, { mimeType: preferredMime })
-        : new MediaRecorder(stream);
+      let recorder: MediaRecorder;
+      try {
+        const options: MediaRecorderOptions = { audioBitsPerSecond: 24000 };
+        if (preferredMime) options.mimeType = preferredMime;
+        recorder = new MediaRecorder(stream, options);
+      } catch {
+        recorder = preferredMime
+          ? new MediaRecorder(stream, { mimeType: preferredMime })
+          : new MediaRecorder(stream);
+      }
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (ev) => {
@@ -691,6 +770,75 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
             )}
           </div>
 
+          {/* Dual-Mode Accuracy Selector: Fast Check vs Advanced Accuracy */}
+          <div
+            role="radiogroup"
+            aria-label="Voice accuracy check mode"
+            className="bg-white border border-slate-200 rounded-xl p-2 grid grid-cols-1 sm:grid-cols-2 gap-2"
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={checkMode === 'fast'}
+              disabled={isRecording || isAnalyzing}
+              onClick={() => handleSelectCheckMode('fast')}
+              className={`flex items-start gap-2.5 p-2.5 rounded-lg border text-left transition-colors cursor-pointer disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 ${
+                checkMode === 'fast'
+                  ? 'bg-blue-50 border-blue-300 text-blue-950'
+                  : 'bg-slate-50/60 border-transparent text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <div
+                className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 mt-0.5 ${
+                  checkMode === 'fast'
+                    ? 'bg-blue-700 text-white'
+                    : 'bg-white border border-slate-200 text-slate-500'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold leading-tight">
+                  Fast Check <span className="font-normal opacity-75">· Quicker response</span>
+                </p>
+                <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
+                  Best for quick daily drills &amp; fast repeat practice.
+                </p>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              role="radio"
+              aria-checked={checkMode === 'advanced'}
+              disabled={isRecording || isAnalyzing}
+              onClick={() => handleSelectCheckMode('advanced')}
+              className={`flex items-start gap-2.5 p-2.5 rounded-lg border text-left transition-colors cursor-pointer disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 ${
+                checkMode === 'advanced'
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                  : 'bg-slate-50/60 border-transparent text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <div
+                className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 mt-0.5 ${
+                  checkMode === 'advanced'
+                    ? 'bg-emerald-700 text-white'
+                    : 'bg-white border border-slate-200 text-slate-500'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold leading-tight">
+                  Advanced Accuracy <span className="font-normal opacity-75">· Deeper check</span>
+                </p>
+                <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
+                  Turn on for tricky German sounds (ö, ü, ch, r, Friseur).
+                </p>
+              </div>
+            </button>
+          </div>
+
           {/* Interactive Word Breakdown Map & Human-Teacher Step-by-Step Drill Panel */}
           {showTeacherPanel && (
             <PronunciationTeacherPanel
@@ -738,25 +886,53 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
                       {feedback.accuracyScore}%
                     </span>
                     <div>
-                      <p className="text-sm font-semibold text-slate-900">
-                        {feedback.practicedChunk
-                          ? `Part “${feedback.practicedChunk}” · ${tier.label}`
-                          : tier.label}
-                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {feedback.practicedChunk
+                            ? `Part “${feedback.practicedChunk}” · ${tier.label}`
+                            : tier.label}
+                        </p>
+                        {feedback.evaluationMode && (
+                          <span
+                            className={`text-[11px] font-medium px-2 py-0.5 rounded-md border ${
+                              feedback.evaluationMode === 'advanced'
+                                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                                : 'bg-blue-50 border-blue-200 text-blue-800'
+                            }`}
+                          >
+                            {feedback.evaluationMode === 'advanced'
+                              ? 'Advanced Accuracy'
+                              : 'Fast Check'}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs font-devanagari text-slate-600">{tier.hindiLabel}</p>
                     </div>
                   </div>
 
-                  {latestAttempt?.audioUrl && (
-                    <button
-                      type="button"
-                      onClick={() => handlePlayUserRecording(latestAttempt.audioUrl!)}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] text-xs font-medium text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer"
-                    >
-                      <Play className="w-3.5 h-3.5 text-blue-700" aria-hidden="true" />
-                      <span>{isPlayingUserClip ? 'Playing Your Voice…' : 'Hear My Recording'}</span>
-                    </button>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {latestAttempt?.audioUrl && (
+                      <button
+                        type="button"
+                        onClick={() => handlePlayUserRecording(latestAttempt.audioUrl!)}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] text-xs font-medium text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer"
+                      >
+                        <Play className="w-3.5 h-3.5 text-blue-700" aria-hidden="true" />
+                        <span>{isPlayingUserClip ? 'Playing Your Voice…' : 'Hear My Recording'}</span>
+                      </button>
+                    )}
+                    {feedback.evaluationMode === 'fast' && lastRecordedRef.current && (
+                      <button
+                        type="button"
+                        disabled={isAnalyzing || isRecording}
+                        onClick={handleRecheckWithAdvanced}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[36px] text-xs font-semibold text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg cursor-pointer disabled:opacity-50"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-700" aria-hidden="true" />
+                        <span>Re-check with Advanced Accuracy</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Visual Accuracy Meter Bar */}
@@ -890,10 +1066,14 @@ function PronunciationCheckModal({ target, onClose }: PronunciationCheckModalPro
                 <p className="text-sm font-semibold text-slate-900 leading-tight">
                   {activeChunk
                     ? `Checking your “${activeChunk.chunk}” sound…`
-                    : 'Analyzing your German pronunciation…'}
+                    : analyzingMode === 'advanced'
+                      ? 'Advanced Accuracy: Deep phonetic analysis…'
+                      : 'Fast Check: Scoring your German pronunciation…'}
                 </p>
                 <p className="text-xs text-slate-500">
-                  Checking each prefix, infix, vowel &amp; ending sound
+                  {analyzingMode === 'advanced'
+                    ? 'Inspecting umlauts, ch/r sounds, prefix, infix & ending precision'
+                    : 'Quick check of each syllable & sound accuracy'}
                 </p>
               </div>
             </div>

@@ -8,6 +8,8 @@ import {
   getAccuracyTier,
   getChunkRoleLabel,
   getChunkStatusMeta,
+  getEvaluationModelPlan,
+  normalizeCheckMode,
   normalizePronunciationFeedback,
   sanitizeAudioMimeType,
 } from './pronunciationCheck';
@@ -161,4 +163,26 @@ test('normalizePronunciationFeedback clamps scores, normalizes wordBreakdown, an
   // Falls back to deterministic breakdown for Friseur if omitted
   assert.equal(result.wordBreakdown.length, 4);
   assert.equal(result.wordBreakdown[0].chunk, 'Fri-');
+});
+
+test('normalizeCheckMode and getEvaluationModelPlan route fast vs advanced modes safely', () => {
+  assert.equal(normalizeCheckMode('fast'), 'fast');
+  assert.equal(normalizeCheckMode('advanced'), 'advanced');
+  assert.equal(normalizeCheckMode('unknown'), 'fast');
+  assert.equal(normalizeCheckMode(undefined), 'fast');
+
+  const fastPlan = getEvaluationModelPlan('fast');
+  assert.equal(fastPlan[0].model, 'gemini-3.1-flash-lite');
+  assert.equal(fastPlan[0].thinkingLevel, 'MINIMAL');
+  assert.equal(fastPlan[1].model, 'gemini-4-hydrogen');
+  assert.equal(fastPlan[1].thinkingLevel, 'LOW');
+
+  const advPlan = getEvaluationModelPlan('advanced');
+  assert.equal(advPlan[0].model, 'gemini-4-hydrogen');
+  assert.equal(advPlan[0].thinkingLevel, 'LOW');
+  assert.equal(advPlan[1].model, 'gemini-3.1-flash-lite');
+  assert.equal(advPlan[1].thinkingLevel, 'MINIMAL');
+
+  const withMode = normalizePronunciationFeedback({ accuracyScore: 82 }, 'Friseur', undefined, 'advanced');
+  assert.equal(withMode.evaluationMode, 'advanced');
 });

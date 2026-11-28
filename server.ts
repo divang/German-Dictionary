@@ -7,6 +7,8 @@ import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { germanLexicon } from './server/lexiconIndex';
 import { buildGermanTtsAttempts } from './server/ttsHelper';
 import {
+  getEvaluationModelPlan,
+  normalizeCheckMode,
   normalizePronunciationFeedback,
   sanitizeAudioMimeType,
 } from './src/utils/pronunciationCheck';
@@ -1094,6 +1096,7 @@ async function startServer() {
       typeof req.body?.parentTarget === 'string' ? req.body.parentTarget.trim().slice(0, 220) : '';
     const chunkRole =
       typeof req.body?.chunkRole === 'string' ? req.body.chunkRole.trim().slice(0, 30) : '';
+    const checkMode = normalizeCheckMode(req.body?.mode);
 
     if (!targetText) {
       res.status(400).json({ error: 'Missing target German word or sentence to check.' });
@@ -1122,8 +1125,14 @@ async function startServer() {
     const mimeType = sanitizeAudioMimeType(rawMime);
     const isChunkDrill = Boolean(focusChunk);
 
+    const modeGuidance =
+      checkMode === 'advanced'
+        ? 'DEEP PHONETIC ACCURACY MODE: Inspect subtle Standard German acoustics carefully — lip rounding on ö/ü/eu, ich-Laut (/ç/) vs ach-Laut (/x/), voiced initial/medial s (/z/) vs sharp s/ß, final devoicing (b/d/g -> p/t/k), vocalized -r (/ɐ̯/), and primary word stress. Give detailed mouth-position coaching.'
+        : 'FAST CHECK MODE: Give an honest, accurate score and keep every text field crisp and concise (1 short sentence per field) for snappy everyday drills.';
+
     const evalPrompt = [
       'You are a patient, attentive, human Standard German (Hochdeutsch) phonetics teacher coaching a native Hindi speaker.',
+      modeGuidance,
       isChunkDrill
         ? `STEP-BY-STEP DRILL MODE: The learner is practicing ONLY the isolated ${chunkRole || 'sound'} chunk "${focusChunk}" (target audio/text: "${targetText}") from the full German word "${parentTarget || targetText}".`
         : `FULL WORD / PHRASE MODE — Target German to pronounce: "${targetText}"`,
@@ -1147,21 +1156,18 @@ async function startServer() {
       .filter(Boolean)
       .join('\n');
 
-    const attempts: { model: string; thinkingLevel?: ThinkingLevel }[] = [
-      { model: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.LOW },
-      { model: 'gemini-3.1-flash-lite' },
-    ];
+    const modelPlan = getEvaluationModelPlan(checkMode);
 
     let lastErr: unknown = null;
-    for (const attempt of attempts) {
+    for (const attempt of modelPlan) {
       try {
+        const mappedThinking =
+          attempt.thinkingLevel === 'MINIMAL' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
         const config: Record<string, unknown> = {
           responseMimeType: 'application/json',
           responseSchema: PRONUNCIATION_EVAL_SCHEMA,
+          thinkingConfig: { thinkingLevel: mappedThinking },
         };
-        if (attempt.thinkingLevel) {
-          config.thinkingConfig = { thinkingLevel: attempt.thinkingLevel };
-        }
 
         const response = await ai.models.generateContent({
           model: attempt.model,
@@ -1186,8 +1192,9 @@ async function startServer() {
             parsed,
             targetText,
             focusChunk || undefined,
+            checkMode,
           );
-          res.json({ feedback });
+          res.json({ feedback, mode: checkMode });
           return;
         }
       } catch (err) {
